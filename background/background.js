@@ -112,6 +112,11 @@ const BROWSER_TOOLS = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "capture_screenshot",
+    description: "현재 보이는 탭의 화면을 캡처해서 다운로드합니다. '스크린샷 찍어줘', '화면 캡처해줘', '이 화면 저장해줘' 같은 표현에 사용합니다.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
     name: "unknown_command",
     description: "사용자의 명령을 이해할 수 없거나 지원하지 않는 작업일 때 사용합니다",
     input_schema: {
@@ -277,7 +282,8 @@ async function parseIntent(text) {
       "'확대해줘'/'키워줘'/'화면 크게' → zoom_in, '축소해줘'/'줄여줘'/'작게' → zoom_out, " +
       "'화면 초기화'/'원래 크기' → zoom_reset, " +
       "'북마크 추가'/'저장해줘'/'즐겨찾기 추가' → bookmark_current, " +
-      "'음소거'/'소리 꺼'/'음소거 해제' → mute_tab. " +
+      "'음소거'/'소리 꺼'/'음소거 해제' → mute_tab, " +
+      "'스크린샷 찍어줘'/'화면 캡처해줘'/'이 화면 저장해줘'/'캡처해줘' → capture_screenshot. " +
       "명확하지 않거나 지원하지 않는 명령은 unknown_command를 사용하세요.",
     tools: BROWSER_TOOLS,
     // "any": 반드시 도구 중 하나를 선택하도록 강제 (auto면 텍스트 응답을 줄 수 있음)
@@ -367,8 +373,9 @@ function formatIntentLabel(tool, input) {
     case "zoom_out":          return "🔍- 페이지 축소";
     case "zoom_reset":        return "🔍 화면 크기 초기화 (100%)";
     case "bookmark_current":  return "🔖 현재 페이지 북마크 추가";
-    case "mute_tab":          return "🔇 탭 음소거 전환";
-    case "unknown_command":   return `❓ 이해 불가: ${input.reason}`;
+    case "mute_tab":           return "🔇 탭 음소거 전환";
+    case "capture_screenshot": return "📸 화면 캡처";
+    case "unknown_command":    return `❓ 이해 불가: ${input.reason}`;
     default:                  return `${tool}: ${JSON.stringify(input)}`;
   }
 }
@@ -617,6 +624,10 @@ async function executeAction(tool, input) {
       return isMuted ? "음소거를 해제했습니다" : "탭을 음소거했습니다";
     }
 
+    case "capture_screenshot": {
+      return await executeCaptureScreenshot();
+    }
+
     case "unknown_command":
       // processCommand에서 이미 처리 — 여기까지 오지 않음
       console.warn("[Action] unknown_command가 executeAction에 전달됨 (예상치 못한 경로)");
@@ -685,6 +696,60 @@ async function executeYouTubePlay(query) {
   await chrome.tabs.create({ url: videoUrl, active: true });
 
   return `▶ "${title}" 재생 중`;
+}
+
+/** ── 스크린샷 캡처 ── */
+
+/**
+ * 현재 보이는 탭을 PNG로 캡처해서 다운로드 폴더에 저장
+ *
+ * @returns {Promise<string>} 성공 메시지 (파일명 포함)
+ */
+async function executeCaptureScreenshot() {
+  // 파일명: screenshot-YYYY-MM-DD-HH-MM-SS.png
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const filename =
+    `screenshot-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `-${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.png`;
+
+  console.log("[Screenshot] 캡처 시작, 파일명:", filename);
+
+  let dataUrl;
+  try {
+    // null → 현재 포커스된 창의 활성 탭 캡처 (activeTab 권한 필요)
+    dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+  } catch (err) {
+    console.error("[Screenshot] 캡처 실패:", err.message);
+    // chrome://, chrome-extension:// 등 보호된 페이지는 캡처 불가
+    if (
+      err.message.includes("Cannot access") ||
+      err.message.includes("chrome://") ||
+      err.message.includes("chrome-extension://")
+    ) {
+      throw new Error("이 페이지는 캡처할 수 없습니다. 일반 웹페이지에서 시도해주세요.");
+    }
+    throw new Error("화면 캡처에 실패했습니다: " + err.message);
+  }
+
+  console.log("[Screenshot] 캡처 완료, dataUrl 길이:", dataUrl.length);
+
+  // chrome.downloads.download은 콜백 기반 → Promise로 래핑
+  const downloadId = await new Promise((resolve, reject) => {
+    chrome.downloads.download(
+      { url: dataUrl, filename, saveAs: false },
+      (id) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error("다운로드 실패: " + chrome.runtime.lastError.message));
+        } else {
+          resolve(id);
+        }
+      }
+    );
+  });
+
+  console.log("[Screenshot] 다운로드 시작, downloadId:", downloadId, "파일명:", filename);
+  return `📸 화면을 캡처해서 다운로드했습니다 (${filename})`;
 }
 
 /** ── 유틸 ── */
