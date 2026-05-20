@@ -8,11 +8,14 @@
     "tabs",
     "scripting",
     "storage",
-    "activeTab"
+    "activeTab",
+    "bookmarks"
   ],
   "host_permissions": [
     "<all_urls>",
-    "https://api.openai.com/*"
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://www.googleapis.com/*"
   ],
 
   "background": {

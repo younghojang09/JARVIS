@@ -11,52 +11,106 @@
 
     <!-- 헤더 -->
     <header class="header">
-      <img src="../icons/icon48.png" alt="logo" class="logo" />
-      <h1 class="title">Voice Browser</h1>
-      <a href="../options/options.html" target="_blank" class="settings-btn" title="설정">⚙️</a>
+      <div class="header-brand">
+        <div class="brand-dot"></div>
+        <span class="brand-name">Voice Browser</span>
+      </div>
+      <a href="../options/options.html" target="_blank" class="settings-btn" title="설정">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65
+                   0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9
+                   19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0
+                   0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65
+                   1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a
+                   1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0
+                   0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65
+                   0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </a>
     </header>
 
-    <!-- 상태 표시 뱃지 -->
-    <div class="status-badge" id="statusBadge">
-      <span class="status-dot" id="statusDot"></span>
-      <span class="status-text" id="statusText">대기중</span>
+    <!-- 단계 표시기 -->
+    <div class="steps-bar" id="stepsBar">
+      <div class="step active" data-step="0">
+        <div class="step-dot"></div>
+        <span class="step-label">대기</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" data-step="1">
+        <div class="step-dot"></div>
+        <span class="step-label">듣는 중</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" data-step="2">
+        <div class="step-dot"></div>
+        <span class="step-label">분석 중</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" data-step="3">
+        <div class="step-dot"></div>
+        <span class="step-label">실행 완료</span>
+      </div>
     </div>
 
-    <!-- 마이크 버튼 -->
-    <div class="mic-wrapper">
-      <button class="mic-btn" id="micBtn" aria-label="음성 녹음 시작">
-        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-          <line x1="12" y1="19" x2="12" y2="23"/>
-          <line x1="8" y1="23" x2="16" y2="23"/>
-        </svg>
-      </button>
+    <!-- 예시 힌트 -->
+    <div class="examples-bar">
+      <span class="examples-prefix">예시</span>
+      <span class="example-text" id="exampleText">"유튜브 열어줘"</span>
+    </div>
+
+    <!-- 마이크 섹션 -->
+    <div class="mic-section">
+      <div class="mic-wrapper">
+        <div class="mic-pulse-ring" id="micPulseRing"></div>
+        <button class="mic-btn" id="micBtn" aria-label="음성 녹음 시작">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+      </div>
+      <canvas class="waveform-canvas hidden" id="waveformCanvas"></canvas>
       <p class="mic-hint" id="micHint">버튼을 눌러 말하세요</p>
     </div>
 
-    <!-- 인식된 텍스트 -->
-    <section class="result-section">
-      <label class="result-label">인식된 텍스트</label>
-      <div class="result-box" id="transcriptBox">
-        <span class="placeholder-text">음성을 인식하면 여기에 표시됩니다</span>
-      </div>
-    </section>
+    <!-- 인식된 텍스트 카드 -->
+    <div class="result-card hidden" id="transcriptCard">
+      <span class="card-label">인식된 텍스트</span>
+      <p class="card-text" id="transcriptText"></p>
+    </div>
 
-    <!-- 실행 중인 액션 -->
-    <section class="result-section">
-      <label class="result-label">실행 액션</label>
-      <div class="result-box action-box" id="actionBox">
-        <span class="placeholder-text">실행할 명령이 여기에 표시됩니다</span>
+    <!-- 실행 액션 카드 -->
+    <div class="result-card action-card hidden" id="actionCard">
+      <div class="action-bar"></div>
+      <div class="action-body">
+        <span class="card-label">실행 액션</span>
+        <p class="action-intent-label" id="actionLabel"></p>
+        <p class="action-result-msg hidden" id="actionResult"></p>
+        <p class="action-raw" id="actionRaw"></p>
       </div>
-    </section>
+    </div>
 
-    <!-- 에러 메시지 -->
-    <div class="error-box hidden" id="errorBox"></div>
+    <!-- 에러 카드 -->
+    <div class="result-card error-card hidden" id="errorCard">
+      <span class="card-label">오류</span>
+      <p class="card-text error-text" id="errorContent"></p>
+    </div>
+
+    <!-- 히스토리 섹션 -->
+    <div class="history-section hidden" id="historySection">
+      <div class="history-header">
+        <span class="history-title">최근 명령</span>
+        <button class="history-clear-btn" id="historyClearBtn">지우기</button>
+      </div>
+      <ul class="history-list" id="historyList"></ul>
+    </div>
 
   </div>
-
   <script src="popup.js"></script>
 </body>
 </html>

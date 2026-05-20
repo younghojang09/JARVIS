@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 환경 변수 / 비밀 키
+.env
+.env.local
+*.key
+secrets.json
+credentials.json
+
+# 에디터
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node (혹시 있으면)
+node_modules/
+package-lock.json
+
+# 로그
+*.log
+
+# Claude Code 작업 캐시
+.claude/
+
+# 임시 파일
+*.tmp
+*.bak

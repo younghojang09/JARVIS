@@ -1,36 +1,72 @@
 // popup.js — 팝업 UI 진입점
 // 역할: 마이크 녹음 제어, background.js와 메시지 통신, UI 상태 업데이트
 
-/** ── 상태 정의 ── */
+/** ── 상태 정의 (단계 기반) ── */
 const STATUS = {
-  IDLE:       { text: "대기중",    dot: "",           hint: "버튼을 눌러 말하세요" },
-  RECORDING:  { text: "녹음중",    dot: "recording",  hint: null }, // hint는 타이머가 동적으로 채움
-  PROCESSING: { text: "처리중...", dot: "processing", hint: "잠시 기다려주세요..." },
-  DONE:       { text: "완료",      dot: "done",       hint: "버튼을 눌러 다시 말하세요" },
-  ERROR:      { text: "오류",      dot: "error",      hint: "버튼을 눌러 다시 시도하세요" },
+  IDLE:      { step: 0, hint: "버튼을 눌러 말하세요" },
+  RECORDING: { step: 1, hint: null }, // 타이머가 동적으로 채움
+  STT:       { step: 2, hint: "Whisper가 음성을 인식하고 있습니다" },
+  ANALYZING: { step: 2, hint: "Claude가 명령을 분석하고 있습니다" },
+  DONE:      { step: 3, hint: "완료! 버튼을 눌러 다시 말하세요" },
+  ERROR:     { step: 0, hint: "오류 발생 — 버튼을 눌러 다시 시도하세요", isError: true },
 };
 
 /** ── DOM 참조 ── */
-const micBtn        = document.getElementById("micBtn");
-const statusDot     = document.getElementById("statusDot");
-const statusText    = document.getElementById("statusText");
-const micHint       = document.getElementById("micHint");
-const transcriptBox = document.getElementById("transcriptBox");
-const actionBox     = document.getElementById("actionBox");
-const errorBox      = document.getElementById("errorBox");
+const micBtn         = document.getElementById("micBtn");
+const micPulseRing   = document.getElementById("micPulseRing");
+const micHint        = document.getElementById("micHint");
+const waveformCanvas = document.getElementById("waveformCanvas");
+const exampleText    = document.getElementById("exampleText");
+const stepsBar       = document.getElementById("stepsBar");
+const stepEls        = Array.from(stepsBar.querySelectorAll(".step"));
+
+const transcriptCard = document.getElementById("transcriptCard");
+const transcriptText = document.getElementById("transcriptText");
+
+const actionCard     = document.getElementById("actionCard");
+const actionLabel    = document.getElementById("actionLabel");
+const actionResult   = document.getElementById("actionResult");
+const actionRaw      = document.getElementById("actionRaw");
+
+const errorCard      = document.getElementById("errorCard");
+const errorContent   = document.getElementById("errorContent");
+
+const historySection  = document.getElementById("historySection");
+const historyList     = document.getElementById("historyList");
+const historyClearBtn = document.getElementById("historyClearBtn");
 
 /** ── 녹음 상태 ── */
-let mediaRecorder   = null;
-let audioChunks     = [];
-let isRecording     = false;
-let recordingTimerInterval = null; // 녹음 타이머 인터벌 ID
+let mediaRecorder          = null;
+let audioChunks            = [];
+let isRecording            = false;
+let recordingTimerInterval = null;
+let lastTranscriptText     = "";
+
+/** ── 웨이브폼 상태 ── */
+let audioCtx       = null;
+let analyser       = null;
+let waveformAnimId = null;
+
+/** ── 예시 힌트 ── */
+const EXAMPLES = [
+  '"유튜브 열어줘"',
+  '"구글에서 파이썬 검색해줘"',
+  '"이 탭 닫아줘"',
+  '"새 탭 열어줘"',
+  '"아래로 스크롤해줘"',
+  '"뒤로 가줘"',
+  '"새로고침해줘"',
+  '"다음 탭으로 이동해줘"',
+  '"페이지 확대해줘"',
+  '"북마크에 추가해줘"',
+  '"소리 꺼줘"',
+];
+let exampleIdx = 0;
+
+/** ── 히스토리 상수 ── */
+const MAX_HISTORY = 5;
 
 /** ── 지원 오디오 포맷 자동 감지 ── */
-
-/**
- * 브라우저가 지원하는 오디오 포맷 중 Whisper와 호환되는 것을 자동 선택
- * @returns {string} 지원되는 mimeType (없으면 빈 문자열 → MediaRecorder 기본값 사용)
- */
 function getSupportedMimeType() {
   const candidates = [
     "audio/webm;codecs=opus", // Chrome 기본, 가장 선호
@@ -43,81 +79,183 @@ function getSupportedMimeType() {
   return supported || "";
 }
 
-/** ── UI 업데이트 헬퍼 ── */
+/** ── 단계 표시기 ── */
+function setStepActive(stepIdx, isError = false) {
+  stepEls.forEach((el, i) => {
+    el.classList.remove("active", "done", "error");
+    if (i < stepIdx)        el.classList.add("done");
+    else if (i === stepIdx) el.classList.add(isError ? "error" : "active");
+  });
+}
 
 function setStatus(state) {
   const s = STATUS[state];
-  statusDot.className    = "status-dot " + s.dot;
-  statusText.textContent = s.text;
-  if (s.hint !== null) {
-    micHint.textContent = s.hint;
+  setStepActive(s.step, s.isError ?? false);
+  if (s.hint !== null) micHint.textContent = s.hint;
+}
+
+/** ── 웨이브폼 ── */
+function initWaveformCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  waveformCanvas.width  = 240 * dpr;
+  waveformCanvas.height = 40  * dpr;
+  // CSS 크기는 popup.css에서 240x40으로 지정; DPR 보정으로 선명하게 렌더링
+  waveformCanvas.getContext("2d").scale(dpr, dpr);
+}
+
+function startWaveform(stream) {
+  waveformCanvas.classList.remove("hidden");
+  audioCtx = new AudioContext();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 128;
+  const source = audioCtx.createMediaStreamSource(stream);
+  source.connect(analyser);
+  drawWaveform();
+}
+
+function stopWaveform() {
+  cancelAnimationFrame(waveformAnimId);
+  waveformAnimId = null;
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  analyser = null;
+  waveformCanvas.classList.add("hidden");
+  waveformCanvas.getContext("2d").clearRect(0, 0, 240, 40);
+}
+
+function drawWaveform() {
+  waveformAnimId = requestAnimationFrame(drawWaveform);
+  if (!analyser) return;
+
+  const ctx    = waveformCanvas.getContext("2d");
+  const bufLen = analyser.frequencyBinCount;
+  const data   = new Uint8Array(bufLen);
+  analyser.getByteFrequencyData(data);
+
+  ctx.clearRect(0, 0, 240, 40);
+  ctx.fillStyle = "#5856D6"; // var(--accent)
+
+  const barW = 240 / bufLen;
+  const gap  = 1.5;
+
+  for (let i = 0; i < bufLen; i++) {
+    const barH = Math.max((data[i] / 255) * 40, 2);
+    const x = i * barW;
+    const y = (40 - barH) / 2;
+    const w = Math.max(barW - gap, 1);
+    const r = Math.min(w / 2, 2);
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, barH, r);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x, y, w, barH);
+    }
   }
 }
 
-function setTranscript(text) {
-  transcriptBox.className = "result-box has-content";
-  transcriptBox.textContent = text;
+/** ── 예시 힌트 로테이션 ── */
+function startExampleRotation() {
+  exampleText.textContent = EXAMPLES[0];
+  exampleText.style.opacity = "1";
+
+  setInterval(() => {
+    exampleText.style.opacity = "0";
+    setTimeout(() => {
+      exampleIdx = (exampleIdx + 1) % EXAMPLES.length;
+      exampleText.textContent = EXAMPLES[exampleIdx];
+      exampleText.style.opacity = "1";
+    }, 220);
+  }, 3000);
 }
 
-function clearResults() {
-  transcriptBox.className = "result-box";
-  transcriptBox.innerHTML = '<span class="placeholder-text">음성을 인식하면 여기에 표시됩니다</span>';
-  actionBox.className = "result-box action-box";
-  actionBox.innerHTML = '<span class="placeholder-text">명령 분석은 Day 3에서 구현 예정입니다</span>';
-  errorBox.textContent = "";
-  errorBox.classList.add("hidden");
+/** ── 결과 카드 UI ── */
+function showTranscriptCard(text) {
+  transcriptText.textContent = text;
+  transcriptCard.classList.remove("hidden");
 }
 
-function showError(message) {
-  console.error("[Popup] 오류:", message);
-  errorBox.innerHTML = "";
-  errorBox.textContent = "⚠️ " + message;
-  errorBox.classList.remove("hidden");
-  setStatus("ERROR");
-  micBtn.classList.remove("recording", "processing");
-  micBtn.disabled = false;
+function showActionCard(tool, input, intentLabel, execResult) {
+  actionLabel.textContent = intentLabel;
+
+  actionRaw.textContent = Object.keys(input).length > 0
+    ? `${tool}(${JSON.stringify(input)})`
+    : `${tool}()`;
+
+  if (execResult) {
+    actionResult.textContent = execResult.message;
+    actionResult.className = "action-result-msg " +
+      (execResult.isUnknown ? "unknown" : execResult.success ? "success" : "failure");
+    actionResult.classList.remove("hidden");
+  } else {
+    actionResult.classList.add("hidden");
+  }
+
+  actionCard.className = "result-card action-card";
+  if (execResult) {
+    if (execResult.isUnknown)    actionCard.classList.add("unknown");
+    else if (execResult.success) actionCard.classList.add("success");
+    else                         actionCard.classList.add("failure");
+  }
+  actionCard.classList.remove("hidden");
+}
+
+function showErrorCard(message) {
+  errorContent.textContent = message;
+  // 기존에 삽입된 권한 버튼 제거
+  const existing = errorCard.querySelector(".permission-btn");
+  if (existing) existing.remove();
+  errorCard.classList.remove("hidden");
 }
 
 /**
- * 마이크 권한 관련 에러 표시 + "권한 요청 페이지 열기" 버튼 삽입
+ * 마이크 권한 오류 표시 + "권한 요청 페이지 열기" 버튼 동적 삽입
  * @param {"prompt" | "denied" | "device"} type
  */
 function showPermissionError(type) {
   const messages = {
-    prompt:  "마이크 권한을 허용해야 합니다. 아래 버튼을 눌러 권한을 설정해주세요.",
-    denied:  "마이크가 차단되어 있습니다. 아래 버튼을 눌러 해제 방법을 확인하세요.",
-    device:  "마이크 장치를 찾을 수 없습니다. 마이크 연결 상태를 확인해주세요.",
+    prompt: "마이크 권한을 허용해야 합니다. 아래 버튼을 눌러 권한을 설정해주세요.",
+    denied: "마이크가 차단되어 있습니다. 아래 버튼을 눌러 해제 방법을 확인하세요.",
+    device: "마이크 장치를 찾을 수 없습니다. 마이크 연결 상태를 확인해주세요.",
   };
 
-  errorBox.innerHTML = "";
+  errorContent.textContent = messages[type] ?? messages.prompt;
 
-  const msg = document.createElement("p");
-  msg.textContent = "⚠️ " + (messages[type] ?? messages.prompt);
+  const existing = errorCard.querySelector(".permission-btn");
+  if (existing) existing.remove();
 
-  // "device" 오류는 설정 페이지로 유도할 수 없으므로 버튼 미표시
+  // "device" 오류는 설정 페이지로 유도 불가 → 버튼 미표시
   if (type !== "device") {
     const btn = document.createElement("button");
     btn.className   = "permission-btn";
     btn.textContent = "🎤 권한 요청 페이지 열기";
     btn.addEventListener("click", openPermissionTab);
-    errorBox.appendChild(msg);
-    errorBox.appendChild(btn);
-  } else {
-    errorBox.appendChild(msg);
+    errorCard.appendChild(btn);
   }
 
-  errorBox.classList.remove("hidden");
+  errorCard.classList.remove("hidden");
   setStatus("ERROR");
-  micBtn.classList.remove("recording", "processing");
-  micBtn.disabled = false;
+  resetMicButton();
+}
+
+function hideErrorCard() {
+  errorCard.classList.add("hidden");
+  errorContent.textContent = "";
+  const existing = errorCard.querySelector(".permission-btn");
+  if (existing) existing.remove();
+}
+
+function clearResults() {
+  transcriptCard.classList.add("hidden");
+  transcriptText.textContent = "";
+  actionCard.className = "result-card action-card hidden";
+  hideErrorCard();
+  lastTranscriptText = "";
 }
 
 /** 마이크 권한 전용 탭 열기 */
 function openPermissionTab() {
-  const url = chrome.runtime.getURL("permission/permission.html");
-  console.log("[Popup] 권한 요청 탭 열기:", url);
-  chrome.tabs.create({ url });
-  window.close(); // 팝업 닫기 (탭 전환 후 팝업이 남아있으면 혼란스러움)
+  chrome.tabs.create({ url: chrome.runtime.getURL("permission/permission.html") });
+  window.close(); // 팝업 닫기 (탭 전환 후 팝업이 남아 있으면 혼란스러움)
 }
 
 /**
@@ -130,15 +268,13 @@ async function checkMicPermission() {
     console.log("[Popup] 마이크 권한 상태:", result.state);
     return result.state;
   } catch (err) {
-    // permissions API를 지원하지 않는 환경 → 일단 시도해보도록 "prompt" 반환
-    console.warn("[Popup] permissions API 사용 불가, 권한 상태 미확인:", err.message);
+    // permissions API를 지원하지 않는 환경 → 일단 시도하도록 "prompt" 반환
+    console.warn("[Popup] permissions API 사용 불가:", err.message);
     return "prompt";
   }
 }
 
 /** ── 녹음 타이머 ── */
-
-/** 녹음 시작 시 경과 시간을 micHint에 표시 */
 function startRecordingTimer() {
   const startTime = Date.now();
   micHint.textContent = "0:00 — 다시 누르면 중지됩니다";
@@ -157,32 +293,24 @@ function stopRecordingTimer() {
 }
 
 /** ── 마이크 녹음 ── */
-
 async function startRecording() {
   if (micBtn.disabled) return;
 
   console.log("[Popup] 마이크 권한 상태 확인 중...");
-
-  // ── 1. 권한 사전 체크 ──────────────────────────────────────
   const permState = await checkMicPermission();
 
   if (permState === "denied") {
-    // Chrome이 이 출처의 마이크를 영구 차단 중 → getUserMedia 시도 없이 바로 안내
     console.warn("[Popup] 마이크 권한 차단됨");
     showPermissionError("denied");
     return;
   }
 
   if (permState === "prompt") {
-    // 아직 한 번도 허용/거부 선택 안 함 → 풀페이지 탭에서 안전하게 요청
-    // (팝업에서 요청하면 다이얼로그 중 팝업이 닫혀 요청이 끊길 수 있음)
+    // 팝업에서 요청하면 다이얼로그 중 팝업이 닫혀 요청이 끊길 수 있음 → 풀페이지 탭으로 이동
     console.log("[Popup] 권한 미설정 → permission 탭으로 이동");
     showPermissionError("prompt");
     return;
   }
-
-  // ── 2. 권한이 "granted"인 경우 정상 녹음 진행 ────────────────
-  console.log("[Popup] 권한 확인됨, 녹음 시작");
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -195,28 +323,28 @@ async function startRecording() {
     mediaRecorder.addEventListener("dataavailable", (e) => {
       if (e.data.size > 0) audioChunks.push(e.data);
     });
-
     mediaRecorder.addEventListener("stop", onRecordingStop);
 
     mediaRecorder.start();
     isRecording = true;
 
     micBtn.classList.add("recording");
+    micPulseRing.classList.add("recording");
     setStatus("RECORDING");
     startRecordingTimer();
+    startWaveform(stream);
     clearResults();
 
   } catch (err) {
-    // 권한은 있었지만 다른 이유로 실패 (장치 없음, 다른 앱이 점유 중 등)
-    console.error("[Popup] getUserMedia 오류:", err.name, err.message, err.stack);
-
+    console.error("[Popup] getUserMedia 오류:", err.name, err.message);
     if (err.name === "NotAllowedError") {
-      // 권한이 "granted"였는데 NotAllowedError → 사용자가 OS 레벨에서 차단했을 가능성
       showPermissionError("denied");
     } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
       showPermissionError("device");
     } else {
-      showError(`마이크 오류 (${err.name}): ${err.message}`);
+      showErrorCard(`마이크 오류 (${err.name}): ${err.message}`);
+      setStatus("ERROR");
+      resetMicButton();
     }
   }
 }
@@ -227,18 +355,20 @@ function stopRecording() {
   console.log("[Popup] 녹음 종료, 오디오 청크 수:", audioChunks.length);
 
   stopRecordingTimer();
+  stopWaveform();
 
   mediaRecorder.stop();
   mediaRecorder.stream.getTracks().forEach((t) => t.stop());
   isRecording = false;
 
   micBtn.classList.remove("recording");
+  micPulseRing.classList.remove("recording");
   micBtn.classList.add("processing");
-  micBtn.disabled = true; // 처리 완료될 때까지 버튼 비활성화
-  setStatus("PROCESSING");
+  micBtn.disabled = true;
+  setStatus("STT");
 }
 
-/** 녹음 종료 후 오디오 Blob을 background로 전송 */
+/** 녹음 종료 후 오디오 Blob → background 전송 */
 async function onRecordingStop() {
   const actualMimeType = mediaRecorder.mimeType || "audio/webm";
   const audioBlob      = new Blob(audioChunks, { type: actualMimeType });
@@ -250,47 +380,128 @@ async function onRecordingStop() {
 
   chrome.runtime.sendMessage(
     { type: "PROCESS_AUDIO", audioBase64, mimeType: actualMimeType },
-    handleBackgroundResponse
+    handleAudioResponse
   );
 }
 
 /** ── Background 응답 처리 ── */
+function handleAudioResponse(response) {
+  console.log("[Popup] PROCESS_AUDIO 응답:", response);
 
-function handleBackgroundResponse(response) {
-  console.log("[Popup] Background 응답:", response);
-
-  micBtn.classList.remove("processing");
-  micBtn.disabled = false;
-
-  // 응답 없음 = 서비스 워커 재시작 필요
   if (!response) {
-    showError("백그라운드 응답 없음. 확장 프로그램을 다시 로드하거나 재설치해주세요.");
+    resetMicButton();
+    showErrorCard("백그라운드 응답 없음. 확장 프로그램을 다시 로드해주세요.");
+    setStatus("ERROR");
     return;
   }
-
   if (response.error) {
-    showError(response.error);
+    resetMicButton();
+    showErrorCard(response.error);
+    setStatus("ERROR");
     return;
   }
 
-  if (response.transcript) {
-    console.log("[Popup] 변환 텍스트:", response.transcript);
-    setTranscript(response.transcript);
+  lastTranscriptText = response.transcript;
+  showTranscriptCard(response.transcript);
+  setStatus("ANALYZING");
+
+  chrome.runtime.sendMessage(
+    { type: "PROCESS_COMMAND", text: response.transcript },
+    handleCommandResponse
+  );
+}
+
+function handleCommandResponse(response) {
+  console.log("[Popup] PROCESS_COMMAND 응답:", response);
+
+  resetMicButton();
+
+  if (!response) {
+    showErrorCard("응답 없음. 확장 프로그램을 다시 로드해주세요.");
+    setStatus("ERROR");
+    return;
+  }
+  if (response.error) {
+    showErrorCard(response.error);
+    setStatus("ERROR");
+    return;
   }
 
-  // Day 3에서 actionLabel 추가 예정
-  // if (response.actionLabel) { setAction(response.actionLabel); }
+  const { tool, input, intentLabel, success, message, isUnknown } = response;
 
-  setStatus("DONE");
+  console.log(
+    `[Popup] 결과 — 도구: ${tool} | 성공: ${success} | unknown: ${!!isUnknown} | 메시지: ${message}`
+  );
+
+  showActionCard(tool, input ?? {}, intentLabel, { success, message, isUnknown });
+  saveToHistory(lastTranscriptText, intentLabel, success && !isUnknown);
+
+  if (success && !isUnknown) {
+    setStatus("DONE");
+  } else {
+    setStatus("ERROR");
+  }
+}
+
+/** 마이크 버튼 상태를 처리 완료 상태로 초기화 */
+function resetMicButton() {
+  micBtn.classList.remove("recording", "processing");
+  micBtn.disabled = false;
+}
+
+/** ── 히스토리 ── */
+async function loadHistory() {
+  const { commandHistory = [] } = await chrome.storage.local.get("commandHistory");
+  renderHistory(commandHistory);
+}
+
+async function saveToHistory(text, intentLabel, success) {
+  if (!text) return;
+  const { commandHistory = [] } = await chrome.storage.local.get("commandHistory");
+  commandHistory.unshift({ text, intentLabel, success, timestamp: Date.now() });
+  if (commandHistory.length > MAX_HISTORY) commandHistory.length = MAX_HISTORY;
+  await chrome.storage.local.set({ commandHistory });
+  renderHistory(commandHistory);
+}
+
+function renderHistory(history) {
+  if (!history.length) {
+    historySection.classList.add("hidden");
+    return;
+  }
+  historySection.classList.remove("hidden");
+  historyList.innerHTML = history
+    .map((item, i) =>
+      `<li class="history-item ${item.success ? "success" : "failure"}" data-idx="${i}">
+        <span class="history-text">${escapeHtml(item.text)}</span>
+        <span class="history-time">${timeAgo(item.timestamp)}</span>
+      </li>`
+    )
+    .join("");
+
+  historyList.querySelectorAll(".history-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      const item = history[parseInt(el.dataset.idx, 10)];
+      if (item) rerunCommand(item.text);
+    });
+  });
+}
+
+/** 히스토리 항목을 다시 실행 (Whisper 생략, PROCESS_COMMAND만 전송) */
+function rerunCommand(text) {
+  if (isRecording || micBtn.disabled) return;
+
+  lastTranscriptText = text;
+  clearResults();
+  showTranscriptCard(text);
+  setStatus("ANALYZING");
+  micBtn.classList.add("processing");
+  micBtn.disabled = true;
+
+  chrome.runtime.sendMessage({ type: "PROCESS_COMMAND", text }, handleCommandResponse);
 }
 
 /** ── 유틸 ── */
-
-/**
- * Blob을 base64 문자열로 변환 (data URL에서 헤더 제거)
- * @param {Blob} blob
- * @returns {Promise<string>}
- */
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -300,8 +511,23 @@ function blobToBase64(blob) {
   });
 }
 
-/** ── 이벤트 바인딩 ── */
+function escapeHtml(str) {
+  return str
+    .replace(/&/g,  "&amp;")
+    .replace(/</g,  "&lt;")
+    .replace(/>/g,  "&gt;")
+    .replace(/"/g,  "&quot;");
+}
 
+function timeAgo(timestamp) {
+  const secs = Math.floor((Date.now() - timestamp) / 1000);
+  if (secs < 60)    return "방금 전";
+  if (secs < 3600)  return `${Math.floor(secs / 60)}분 전`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}시간 전`;
+  return `${Math.floor(secs / 86400)}일 전`;
+}
+
+/** ── 이벤트 바인딩 ── */
 micBtn.addEventListener("click", () => {
   if (isRecording) {
     stopRecording();
@@ -310,16 +536,27 @@ micBtn.addEventListener("click", () => {
   }
 });
 
-/** 팝업 열릴 때 API 키 설정 여부 확인 */
+historyClearBtn.addEventListener("click", async () => {
+  await chrome.storage.local.remove("commandHistory");
+  renderHistory([]);
+});
+
+/** ── 초기화 ── */
+initWaveformCanvas();
+startExampleRotation();
+loadHistory();
+
+// API 키 설정 여부 확인 (두 키 모두 필요)
 chrome.storage.local.get(["openaiApiKey", "anthropicApiKey"], (result) => {
-  if (!result.openaiApiKey) {
-    // Whisper 호출에 필수 → 에러로 표시
-    showError("OpenAI API 키가 설정되지 않았습니다. 설정(⚙️)에서 입력해주세요.");
+  const missing = [];
+  if (!result.openaiApiKey)    missing.push("OpenAI (Whisper)");
+  if (!result.anthropicApiKey) missing.push("Anthropic (Claude)");
+
+  if (missing.length > 0) {
+    showErrorCard(`API 키 미설정: ${missing.join(", ")}. 설정(⚙️)에서 입력해주세요.`);
+    setStatus("ERROR");
     return;
   }
-  if (!result.anthropicApiKey) {
-    // Day 3 전까지는 불필요 → 경고만 표시
-    console.warn("[Popup] Anthropic API 키 미설정 (Day 3 기능에 필요)");
-  }
+
   console.log("[Popup] API 키 확인 완료, 준비됨");
 });
