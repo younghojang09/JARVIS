@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Browser</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+
+    <!-- 헤더 -->
+    <header class="header">
+      <img src="../icons/icon48.png" alt="logo" class="logo" />
+      <h1 class="title">Voice Browser</h1>
+      <a href="../options/options.html" target="_blank" class="settings-btn" title="설정">⚙️</a>
+    </header>
+
+    <!-- 상태 표시 뱃지 -->
+    <div class="status-badge" id="statusBadge">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">대기중</span>
+    </div>
+
+    <!-- 마이크 버튼 -->
+    <div class="mic-wrapper">
+      <button class="mic-btn" id="micBtn" aria-label="음성 녹음 시작">
+        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+      <p class="mic-hint" id="micHint">버튼을 눌러 말하세요</p>
+    </div>
+
+    <!-- 인식된 텍스트 -->
+    <section class="result-section">
+      <label class="result-label">인식된 텍스트</label>
+      <div class="result-box" id="transcriptBox">
+        <span class="placeholder-text">음성을 인식하면 여기에 표시됩니다</span>
+      </div>
+    </section>
+
+    <!-- 실행 중인 액션 -->
+    <section class="result-section">
+      <label class="result-label">실행 액션</label>
+      <div class="result-box action-box" id="actionBox">
+        <span class="placeholder-text">실행할 명령이 여기에 표시됩니다</span>
+      </div>
+    </section>
+
+    <!-- 에러 메시지 -->
+    <div class="error-box hidden" id="errorBox"></div>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

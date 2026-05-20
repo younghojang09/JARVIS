@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>마이크 권한 설정 — Voice Browser</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0f0f13;
+      color: #e8e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+      padding: 24px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 480px;
+      background: #1a1a24;
+      border: 1px solid #2a2a3a;
+      border-radius: 20px;
+      padding: 48px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      text-align: center;
+    }
+
+    /* 상태별 화면 — JS에서 hidden 클래스 토글 */
+    .hidden { display: none !important; }
+
+    /* ── 아이콘 원 ── */
+    .icon-circle {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+    }
+
+    .icon-circle.loading  { background: #1e1e30; animation: spin-fade 1.2s infinite; }
+    .icon-circle.success  { background: #052e16; }
+    .icon-circle.error    { background: #2d1515; }
+
+    @keyframes spin-fade {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+
+    /* ── 텍스트 ── */
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .title.success { color: #4ade80; }
+    .title.error   { color: #f87171; }
+    .title.neutral {
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .desc {
+      font-size: 14px;
+      color: #9ca3af;
+      line-height: 1.7;
+      max-width: 360px;
+    }
+
+    /* ── Chrome 설정 안내 박스 ── */
+    .guide-box {
+      width: 100%;
+      background: #111118;
+      border: 1px solid #2a2a3a;
+      border-radius: 12px;
+      padding: 16px 18px;
+      text-align: left;
+    }
+
+    .guide-box ol {
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .guide-box li {
+      font-size: 13px;
+      color: #c4c4d4;
+      line-height: 1.5;
+    }
+
+    .guide-box kbd {
+      background: #2a2a3a;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: inherit;
+      font-size: 12px;
+      color: #a78bfa;
+    }
+
+    /* ── 버튼 ── */
+    .btn {
+      padding: 12px 28px;
+      border-radius: 10px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn:hover  { opacity: 0.88; }
+    .btn:active { transform: scale(0.97); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: #fff;
+    }
+
+    .btn-ghost {
+      background: #1e1e2a;
+      color: #9ca3af;
+      border: 1px solid #2a2a3a;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 권한 요청 중 -->
+  <div class="card" id="sectionRequesting">
+    <div class="icon-circle loading">🎤</div>
+    <h1 class="title neutral">마이크 권한 요청 중...</h1>
+    <p class="desc">
+      브라우저의 마이크 권한 다이얼로그를 확인해주세요.<br />
+      상단에 뜨는 팝업에서 <strong>허용</strong>을 클릭하세요.
+    </p>
+  </div>
+
+  <!-- 권한 허용됨 -->
+  <div class="card hidden" id="sectionGranted">
+    <div class="icon-circle success">✓</div>
+    <h1 class="title success">마이크 권한이 허용되었습니다</h1>
+    <p class="desc">
+      이제 Voice Browser에서 음성 명령을 사용할 수 있습니다.<br />
+      이 탭을 닫고 확장 프로그램 아이콘을 클릭하세요.
+    </p>
+    <button class="btn btn-primary" id="btnClose">이 탭 닫기</button>
+  </div>
+
+  <!-- 권한 거부됨 (영구 차단) -->
+  <div class="card hidden" id="sectionDenied">
+    <div class="icon-circle error">✕</div>
+    <h1 class="title error">마이크 권한이 거부되었습니다</h1>
+    <p class="desc">
+      Chrome이 마이크 접근을 차단했습니다.<br />
+      아래 안내에 따라 수동으로 권한을 허용해주세요.
+    </p>
+
+    <div class="guide-box">
+      <ol>
+        <li>Chrome 주소창 왼쪽 <kbd>🔒 자물쇠</kbd> 아이콘 클릭</li>
+        <li><kbd>사이트 설정</kbd> 선택</li>
+        <li>마이크 항목을 <kbd>허용</kbd>으로 변경</li>
+        <li>이 페이지를 새로고침</li>
+      </ol>
+    </div>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+      <button class="btn btn-primary" id="btnRetry">다시 시도</button>
+      <button class="btn btn-ghost" id="btnClose2">닫기</button>
+    </div>
+  </div>
+
+  <script src="permission.js"></script>
+</body>
+</html>
