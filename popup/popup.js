@@ -132,7 +132,12 @@ function drawWaveform() {
   analyser.getByteFrequencyData(data);
 
   ctx.clearRect(0, 0, 240, 40);
-  ctx.fillStyle = "#5856D6"; // var(--accent)
+
+  // 초록 그라데이션 (#10B981 → #34D399), 좌→우
+  const grad = ctx.createLinearGradient(0, 0, 240, 0);
+  grad.addColorStop(0, "#10B981");
+  grad.addColorStop(1, "#34D399");
+  ctx.fillStyle = grad;
 
   const barW = 240 / bufLen;
   const gap  = 1.5;

@@ -7,9 +7,9 @@
   --text:      #1A1A1A;
   --text-2:    #6B7280;
   --text-3:    #9CA3AF;
-  --accent:    #5856D6;
-  --accent-bg: #EEEFFE;
-  --green:     #34C759;
+  --accent:    #10B981; /* emerald-500 */
+  --accent-bg: #ECFDF5; /* emerald-50 */
+  --green:     #007AFF; /* 성공 상태 — iOS 시스템 블루 */
   --red:       #FF3B30;
   --orange:    #FF9500;
   --radius:    12px;
@@ -180,7 +180,7 @@ body {
   width: 76px;
   height: 76px;
   border-radius: 50%;
-  border: 2px solid var(--red);
+  border: 2px solid var(--accent);
   opacity: 0;
   pointer-events: none;
 }
@@ -205,7 +205,7 @@ body {
   align-items: center;
   justify-content: center;
   transition: background var(--trans), transform var(--trans), box-shadow var(--trans);
-  box-shadow: 0 4px 14px rgba(88, 86, 214, 0.38);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.38);
   outline: none;
   position: relative;
   z-index: 1;
@@ -213,14 +213,14 @@ body {
 
 .mic-btn:hover {
   transform: scale(1.06);
-  box-shadow: 0 6px 20px rgba(88, 86, 214, 0.48);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.48);
 }
 
 .mic-btn:active { transform: scale(0.94); }
 
 .mic-btn.recording {
-  background: var(--red);
-  box-shadow: 0 4px 14px rgba(255, 59, 48, 0.38);
+  background: var(--accent);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.38);
 }
 .mic-btn.recording:hover { transform: none; }
 
