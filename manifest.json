@@ -14,9 +14,7 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "https://api.openai.com/*",
-    "https://api.anthropic.com/*",
-    "https://www.googleapis.com/*"
+    "https://voice-browser-backend-youngho.vercel.app/*"
   ],
 
   "background": {

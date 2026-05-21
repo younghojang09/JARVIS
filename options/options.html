@@ -44,7 +44,7 @@
       background: #1a1a24;
       border: 1px solid #2a2a3a;
       border-radius: 14px;
-      padding: 20px 20px 24px;
+      padding: 24px;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -60,79 +60,53 @@
       padding-bottom: 10px;
     }
 
-    /* ── 폼 필드 ── */
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .field label {
-      font-size: 14px;
-      font-weight: 500;
-      color: #c4c4d4;
-    }
-
-    .field .desc {
-      font-size: 12px;
-      color: #6b7280;
-    }
-
-    .field input {
-      width: 100%;
-      padding: 10px 12px;
-      background: #0f0f13;
-      border: 1px solid #2a2a3a;
-      border-radius: 8px;
-      color: #e8e8f0;
-      font-size: 14px;
-      font-family: "SF Mono", "Fira Code", monospace;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    .field input:focus {
-      border-color: #10B981;
-    }
-
-    .field input.saved {
-      border-color: #10B981;
-    }
-
-    /* ── 버튼 ── */
-    .btn-save {
-      width: 100%;
-      padding: 12px;
-      background: linear-gradient(135deg, #10B981, #059669);
-      border: none;
-      border-radius: 10px;
-      color: #ffffff;
+    /* ── 안내 텍스트 ── */
+    .info-text {
       font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.2s, transform 0.1s;
+      color: #c4c4d4;
+      line-height: 1.7;
     }
-    .btn-save:hover  { opacity: 0.9; }
-    .btn-save:active { transform: scale(0.98); }
 
-    /* ── 상태 메시지 ── */
-    .status-msg {
+    .info-icon {
+      font-size: 32px;
       text-align: center;
-      font-size: 13px;
-      height: 20px;
-      transition: color 0.3s;
     }
-    .status-msg.success { color: #10B981; }
-    .status-msg.error   { color: #f87171; }
+
+    /* ── 서버 상태 배지 ── */
+    .server-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: #0d2418;
+      border: 1px solid #065f46;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #34D399;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      background: #10B981;
+      border-radius: 50%;
+      flex-shrink: 0;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
 
     /* ── 주의사항 ── */
     .notice {
       padding: 12px 14px;
-      background: #1e1a0a;
-      border: 1px solid #78350f;
+      background: #0e1a2e;
+      border: 1px solid #1e3a5f;
       border-radius: 10px;
       font-size: 12px;
-      color: #fbbf24;
+      color: #93c5fd;
       line-height: 1.6;
     }
   </style>
@@ -142,46 +116,36 @@
 
     <header class="page-header">
       <h1>⚙️ Voice Browser 설정</h1>
-      <p>API 키는 브라우저 로컬 스토리지에만 저장되며 외부로 전송되지 않습니다.</p>
+      <p>Voice Browser 확장 프로그램 정보</p>
     </header>
 
-    <!-- API 키 카드 -->
+    <!-- 안내 카드 -->
     <div class="card">
-      <div class="card-title">API 키 설정</div>
+      <div class="card-title">서버 연동 방식</div>
 
-      <div class="field">
-        <label for="openaiKey">OpenAI API 키 (Whisper STT)</label>
-        <span class="desc">음성을 텍스트로 변환하는데 사용됩니다.</span>
-        <input type="password" id="openaiKey" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+      <div class="info-icon">🖥️</div>
+
+      <p class="info-text">
+        이 확장은 <strong>백엔드 서버</strong>를 통해 작동합니다.<br>
+        별도의 API 키 설정이 필요하지 않습니다.
+      </p>
+
+      <p class="info-text" style="font-size:13px; color:#6b7280;">
+        음성 인식(Whisper), 명령 해석(Claude), YouTube 검색에 필요한
+        API 키는 모두 서버에서 안전하게 관리됩니다.
+      </p>
+
+      <div class="server-badge">
+        <span class="dot"></span>
+        백엔드 서버 연결됨 — voice-browser-backend-youngho.vercel.app
       </div>
-
-      <div class="field">
-        <label for="anthropicKey">Anthropic API 키 (Claude)</label>
-        <span class="desc">텍스트 명령을 브라우저 액션으로 변환하는데 사용됩니다.</span>
-        <input type="password" id="anthropicKey" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
-      </div>
-
-      <div class="field">
-        <label for="youtubeKey">YouTube Data API 키 <span style="font-weight:400;color:#6b7280;">(선택)</span></label>
-        <span class="desc">노래나 영상 자동 재생을 위해 필요합니다. "아이유 틀어줘" 같은 명령에 사용됩니다.</span>
-        <span class="desc" style="margin-top:2px;">
-          발급: <a href="https://console.cloud.google.com" target="_blank" style="color:#818cf8;text-decoration:none;">Google Cloud Console</a>에서
-          YouTube Data API v3 활성화 → 사용자 인증 정보 → API 키 생성
-        </span>
-        <input type="password" id="youtubeKey" placeholder="AIza..." autocomplete="off" spellcheck="false" />
-      </div>
-
-      <button class="btn-save" id="saveBtn">저장</button>
-      <p class="status-msg" id="statusMsg"></p>
     </div>
 
-    <!-- 보안 주의사항 -->
+    <!-- 안내 -->
     <div class="notice">
-      ⚠️ API 키는 <strong>chrome.storage.local</strong>에 저장됩니다. 공용 컴퓨터에서 사용 시 저장 후 반드시 로그아웃 및 키를 삭제해주세요.
+      ℹ️ 문제가 발생하면 인터넷 연결 상태를 확인하거나, 잠시 후 다시 시도해주세요.
     </div>
 
   </div>
-
-  <script src="options.js"></script>
 </body>
 </html>

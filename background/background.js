@@ -1,7 +1,10 @@
 // background.js — 서비스 워커 (백그라운드 스크립트)
-// 역할: Whisper STT + Claude 의도 파악 + 액션 실행 파이프라인
+// 역할: 백엔드 API 호출 → Whisper STT + Claude 의도 파악 + 액션 실행 파이프라인
 
-/** ── 브라우저 제어 도구 정의 (Claude Tool Use에 전달) ── */
+/** 백엔드 서버 base URL (API 키는 모두 서버에서 관리) */
+const BACKEND_URL = "https://voice-browser-backend-youngho.vercel.app";
+
+/** ── 브라우저 제어 도구 정의 (문서/참조용 — 실제 Claude 호출은 백엔드에서 수행) ── */
 const BROWSER_TOOLS = [
   {
     name: "open_url",
@@ -62,11 +65,11 @@ const BROWSER_TOOLS = [
   },
   {
     name: "play_youtube",
-    description: "유튜브에서 특정 영상이나 노래를 검색해서 자동으로 재생합니다. '~ 틀어줘', '~ 들려줘', '~ 재생해줘', '~ 틀어봐' 같은 표현에 사용합니다.",
+    description: "유튜브에서 특정 영상이나 노래를 검색해서 자동으로 재생합니다.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "검색어. 예: '아이유 좋은날', '뉴진스 super shy', 'lo-fi music'" },
+        query: { type: "string", description: "검색어. 예: '아이유 좋은날'" },
       },
       required: ["query"],
     },
@@ -113,7 +116,7 @@ const BROWSER_TOOLS = [
   },
   {
     name: "capture_screenshot",
-    description: "현재 보이는 탭의 화면을 캡처해서 다운로드합니다. '스크린샷 찍어줘', '화면 캡처해줘', '이 화면 저장해줘' 같은 표현에 사용합니다.",
+    description: "현재 보이는 탭의 화면을 캡처해서 다운로드합니다.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -177,58 +180,46 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-/** ── Whisper API 호출 ── */
+/** ── 음성 인식 (백엔드 /api/transcribe 호출) ── */
 
 /**
- * OpenAI Whisper API를 호출해 오디오를 한국어 텍스트로 변환
+ * base64 오디오를 백엔드로 전송해 한국어 텍스트로 변환
  *
  * @param {string} audioBase64 - base64 인코딩된 오디오 데이터
- * @param {string} mimeType    - 예: "audio/webm;codecs=opus"
+ * @param {string} mimeType    - 예: "audio/webm;codecs=opus" (백엔드 전달용 로그에만 사용)
  * @returns {Promise<string>}  - 변환된 텍스트
  */
 async function callWhisperAPI(audioBase64, mimeType) {
-  const { openaiApiKey } = await chrome.storage.local.get("openaiApiKey");
-  if (!openaiApiKey) throw new Error("OpenAI API 키가 설정되지 않았습니다. 설정(⚙️)에서 입력해주세요.");
-
-  const ext      = mimeType.split("/")[1].split(";")[0];
-  const bytes    = base64ToUint8Array(audioBase64);
-  const audioFile = new File([bytes], `recording.${ext}`, { type: mimeType });
-
-  console.log("[Whisper] 파일 크기:", audioFile.size, "bytes | 파일명:", audioFile.name);
-
-  if (audioFile.size < 100) {
+  // base64 길이로 파일 크기를 추정 (1자 ≈ 0.75 바이트)
+  const estimatedBytes = Math.floor(audioBase64.length * 0.75);
+  if (estimatedBytes < 100) {
     throw new Error("녹음이 너무 짧습니다. 조금 더 길게 말씀해주세요.");
   }
 
-  const formData = new FormData();
-  formData.append("file", audioFile);
-  formData.append("model", "whisper-1");
-  formData.append("language", "ko");
-
-  console.log("[Whisper] API 호출 시작...");
+  console.log("[Transcribe] 백엔드 호출 시작 | 추정 크기:", estimatedBytes, "bytes | mimeType:", mimeType);
 
   let response;
   try {
-    response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    response = await fetch(`${BACKEND_URL}/api/transcribe`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${openaiApiKey}` },
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio: audioBase64 }),
     });
   } catch (networkErr) {
-    console.error("[Whisper] 네트워크 오류:", networkErr);
-    throw new Error("네트워크 오류: 인터넷 연결을 확인해주세요.");
+    console.error("[Transcribe] 네트워크 오류:", networkErr);
+    throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
   }
 
-  console.log("[Whisper] 응답 상태:", response.status);
+  console.log("[Transcribe] 응답 상태:", response.status);
 
   if (!response.ok) {
-    const errBody = await response.text().catch(() => "(응답 본문 없음)");
-    console.error("[Whisper] 오류 응답:", errBody);
-    throw new Error(whisperErrorMessage(response.status));
+    const errBody = await response.json().catch(() => ({}));
+    console.error("[Transcribe] 오류 응답:", errBody);
+    throw new Error(errBody.error ?? `음성 인식 오류 (HTTP ${response.status})`);
   }
 
   const data = await response.json();
-  console.log("[Whisper] 원본 응답:", data);
+  console.log("[Transcribe] 응답:", data);
 
   if (!data.text || data.text.trim() === "") {
     throw new Error("음성을 인식하지 못했습니다. 마이크에 가까이 대고 다시 시도해주세요.");
@@ -237,19 +228,7 @@ async function callWhisperAPI(audioBase64, mimeType) {
   return data.text.trim();
 }
 
-function whisperErrorMessage(status) {
-  const m = {
-    401: "OpenAI API 키가 올바르지 않습니다. 설정(⚙️)에서 키를 확인해주세요.",
-    403: "OpenAI API 키 권한이 없습니다.",
-    413: "녹음 파일이 너무 큽니다. 짧게 말씀해주세요. (최대 25MB)",
-    429: "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.",
-    500: "OpenAI 서버 오류입니다. 잠시 후 다시 시도해주세요.",
-    503: "OpenAI 서비스가 일시적으로 불가합니다. 잠시 후 다시 시도해주세요.",
-  };
-  return m[status] ?? `Whisper API 오류 (HTTP ${status})`;
-}
-
-/** ── Claude API 의도 파악 (Tool Use) ── */
+/** ── 의도 파악 (백엔드 /api/parse-intent 호출) ── */
 
 /**
  * @typedef {Object} IntentResult
@@ -259,95 +238,50 @@ function whisperErrorMessage(status) {
  */
 
 /**
- * 텍스트 명령을 Claude API (Tool Use)로 전송해 구조화된 액션으로 변환
+ * 텍스트 명령을 백엔드로 전송해 구조화된 액션으로 변환
+ * (백엔드에서 Claude Tool Use 호출 처리)
  *
  * @param {string} text - 사용자 음성 명령 텍스트
  * @returns {Promise<IntentResult>}
  */
 async function parseIntent(text) {
-  const { anthropicApiKey } = await chrome.storage.local.get("anthropicApiKey");
-  if (!anthropicApiKey) throw new Error("Anthropic API 키가 설정되지 않았습니다. 설정(⚙️)에서 입력해주세요.");
-
-  const requestBody = {
-    model: "claude-sonnet-4-5",
-    max_tokens: 1024,
-    system:
-      "당신은 한국어 음성 명령을 해석하는 어시스턴트입니다. " +
-      "사용자의 발화를 듣고 가장 적절한 도구를 선택해서 호출하세요. " +
-      "URL이 필요한 경우 완전한 https:// 주소를 사용하세요. " +
-      "'아이유 좋은날 틀어줘'/'lo-fi 들려줘'/'BTS 재생해줘'/'유튜브에서 강아지 영상 보여줘' → play_youtube. " +
-      "단, '유튜브 열어줘'처럼 명확한 검색어 없이 유튜브 메인을 여는 것은 open_url 사용. " +
-      "명령 예시: '새로고침해줘'/'다시 불러와줘' → refresh_page, " +
-      "'다음 탭'/'오른쪽 탭' → next_tab, '이전 탭'/'왼쪽 탭' → previous_tab, " +
-      "'확대해줘'/'키워줘'/'화면 크게' → zoom_in, '축소해줘'/'줄여줘'/'작게' → zoom_out, " +
-      "'화면 초기화'/'원래 크기' → zoom_reset, " +
-      "'북마크 추가'/'저장해줘'/'즐겨찾기 추가' → bookmark_current, " +
-      "'음소거'/'소리 꺼'/'음소거 해제' → mute_tab, " +
-      "'스크린샷 찍어줘'/'화면 캡처해줘'/'이 화면 저장해줘'/'캡처해줘' → capture_screenshot. " +
-      "명확하지 않거나 지원하지 않는 명령은 unknown_command를 사용하세요.",
-    tools: BROWSER_TOOLS,
-    // "any": 반드시 도구 중 하나를 선택하도록 강제 (auto면 텍스트 응답을 줄 수 있음)
-    tool_choice: { type: "any" },
-    messages: [{ role: "user", content: text }],
-  };
-
-  console.log("[Claude] 요청 body:", JSON.stringify(requestBody, null, 2));
+  console.log("[Intent] 백엔드 호출 시작 | 텍스트:", text);
 
   let response;
   try {
-    response = await fetch("https://api.anthropic.com/v1/messages", {
+    response = await fetch(`${BACKEND_URL}/api/parse-intent`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": anthropicApiKey,
-        "anthropic-version": "2023-06-01",
-        // 브라우저 컨텍스트(서비스 워커)에서 직접 Anthropic API 호출 시 필요
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify(requestBody),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
     });
   } catch (networkErr) {
-    console.error("[Claude] 네트워크 오류:", networkErr);
-    throw new Error("네트워크 오류: 인터넷 연결을 확인해주세요.");
+    console.error("[Intent] 네트워크 오류:", networkErr);
+    throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
   }
 
-  console.log("[Claude] 응답 상태:", response.status);
+  console.log("[Intent] 응답 상태:", response.status);
 
   if (!response.ok) {
-    const errBody = await response.text().catch(() => "(응답 본문 없음)");
-    console.error("[Claude] 오류 응답:", errBody);
-    throw new Error(claudeErrorMessage(response.status));
+    const errBody = await response.json().catch(() => ({}));
+    console.error("[Intent] 오류 응답:", errBody);
+    throw new Error(errBody.error ?? `의도 파악 오류 (HTTP ${response.status})`);
   }
 
   const data = await response.json();
-  console.log("[Claude] 원본 응답:", JSON.stringify(data, null, 2));
+  console.log("[Intent] 응답:", data);
 
-  // content 배열에서 tool_use 블록 추출
-  const toolBlock = data.content?.find((b) => b.type === "tool_use");
-  if (!toolBlock) {
-    // tool_choice: "any" 임에도 tool_use가 없는 경우 (예외 상황)
-    console.error("[Claude] tool_use 블록 없음. 전체 응답:", data);
-    throw new Error("Claude가 도구를 선택하지 않았습니다. 다시 시도해주세요.");
+  const { tool, input } = data;
+  if (!tool) {
+    throw new Error("백엔드가 도구를 반환하지 않았습니다. 다시 시도해주세요.");
   }
 
-  console.log("[Claude] 선택된 도구:", toolBlock.name, "| 입력:", JSON.stringify(toolBlock.input));
+  console.log("[Intent] 선택된 도구:", tool, "| 입력:", JSON.stringify(input));
 
   return {
-    tool: toolBlock.name,
-    input: toolBlock.input,
-    intentLabel: formatIntentLabel(toolBlock.name, toolBlock.input),
+    tool,
+    input,
+    intentLabel: formatIntentLabel(tool, input),
   };
-}
-
-function claudeErrorMessage(status) {
-  const m = {
-    401: "Anthropic API 키가 올바르지 않습니다. 설정(⚙️)에서 키를 확인해주세요.",
-    403: "Anthropic API 키 권한이 없습니다.",
-    429: "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.",
-    500: "Anthropic 서버 오류입니다. 잠시 후 다시 시도해주세요.",
-    503: "Anthropic 서비스가 일시적으로 불가합니다. 잠시 후 다시 시도해주세요.",
-  };
-  return m[status] ?? `Claude API 오류 (HTTP ${status})`;
 }
 
 /**
@@ -638,62 +572,47 @@ async function executeAction(tool, input) {
   }
 }
 
-/** ── YouTube 재생 ── */
+/** ── YouTube 재생 (백엔드 /api/youtube-search 호출) ── */
 
 /**
- * YouTube Data API로 검색 후 첫 번째 영상을 새 탭에서 자동 재생
+ * 백엔드에 검색어를 보내 첫 번째 영상 URL을 받아 새 탭에서 자동 재생
  *
  * @param {string} query - 검색어 (예: "아이유 좋은날")
  * @returns {Promise<string>} 성공 메시지 (영상 제목 포함)
  */
 async function executeYouTubePlay(query) {
-  const { youtube_api_key } = await chrome.storage.local.get("youtube_api_key");
-  if (!youtube_api_key) {
-    throw new Error("YouTube API 키가 설정되지 않았습니다. 설정(⚙️)에서 입력해주세요.");
-  }
-
-  const apiUrl =
-    "https://www.googleapis.com/youtube/v3/search" +
-    `?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=1&key=${youtube_api_key}`;
-
-  // 로그에는 API 키를 마스킹해서 출력
-  console.log("[YouTube] API 호출:", apiUrl.replace(youtube_api_key, "***"));
+  console.log("[YouTube] 백엔드 호출 시작 | 검색어:", query);
 
   let response;
   try {
-    response = await fetch(apiUrl);
+    response = await fetch(`${BACKEND_URL}/api/youtube-search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
   } catch (networkErr) {
     console.error("[YouTube] 네트워크 오류:", networkErr);
-    throw new Error("네트워크 오류: 인터넷 연결을 확인해주세요.");
+    throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
   }
 
   console.log("[YouTube] 응답 상태:", response.status);
 
   if (!response.ok) {
-    const errBody = await response.text().catch(() => "(응답 본문 없음)");
+    const errBody = await response.json().catch(() => ({}));
     console.error("[YouTube] 오류 응답:", errBody);
-    if (response.status === 400) throw new Error("YouTube API 키가 올바르지 않습니다. 설정(⚙️)에서 확인해주세요.");
-    if (response.status === 403) throw new Error("YouTube API 할당량을 초과했거나 키가 비활성화되어 있습니다. 잠시 후 다시 시도해주세요.");
-    throw new Error(`YouTube 검색에 실패했습니다. 잠시 후 다시 시도해주세요. (HTTP ${response.status})`);
+    throw new Error(errBody.error ?? `YouTube 검색 오류 (HTTP ${response.status})`);
   }
 
   const data = await response.json();
-  console.log("[YouTube] 원본 응답:", JSON.stringify(data, null, 2));
+  console.log("[YouTube] 응답:", data);
 
-  if (!data.items || data.items.length === 0) {
+  const { url, title } = data;
+  if (!url) {
     throw new Error(`"${query}" 검색 결과를 찾을 수 없습니다.`);
   }
 
-  const video   = data.items[0];
-  const videoId = video.id.videoId;
-  const title   = video.snippet.title;
-
-  console.log("[YouTube] 재생할 영상 — ID:", videoId, "| 제목:", title);
-
-  // autoplay=1: 일부 브라우저에서 음소거 상태일 때만 자동 재생됨
-  // 사용자가 탭 클릭 시 재생 가능하도록 새 탭에서 열기
-  const videoUrl = `https://www.youtube.com/watch?v=${videoId}&autoplay=1`;
-  await chrome.tabs.create({ url: videoUrl, active: true });
+  await chrome.tabs.create({ url, active: true });
+  console.log("[YouTube] 재생 탭 열기 완료 | 제목:", title, "| URL:", url);
 
   return `▶ "${title}" 재생 중`;
 }
@@ -765,20 +684,4 @@ function normalizeUrl(url) {
     return "https://" + url;
   }
   return url;
-}
-
-/** ── 유틸 ── */
-
-/**
- * base64 문자열을 Uint8Array로 변환
- * @param {string} base64
- * @returns {Uint8Array}
- */
-function base64ToUint8Array(base64) {
-  const binaryStr = atob(base64);
-  const bytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) {
-    bytes[i] = binaryStr.charCodeAt(i);
-  }
-  return bytes;
 }
