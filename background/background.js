@@ -1,6 +1,10 @@
 // background.js — 서비스 워커 (백그라운드 스크립트)
 // 역할: 백엔드 API 호출 → Whisper STT + Claude 의도 파악 + 액션 실행 파이프라인
 
+/** Supabase 프로젝트 기본 URL (인증 엔드포인트에 사용) */
+const SUPABASE_PROJECT_URL = "https://uhqesvkydcziaefwbdjx.supabase.co";
+/** Supabase 공개 API 키 (익명 로그인용) */
+const SUPABASE_ANON_KEY = "sb_publishable_q3Iw5g8Q8ibAmRJ0Anl8RA_k-JvaELv";
 /** 백엔드 서버 base URL (API 키는 모두 서버에서 관리) */
 const BACKEND_URL = "https://voice-browser-backend-youngho.vercel.app";
 
@@ -132,6 +136,172 @@ const BROWSER_TOOLS = [
   },
 ];
 
+/** ── Supabase 인증 ── */
+
+// 동시 호출 방지: 진행 중인 인증 Promise를 저장
+let _authPromise = null;
+
+/**
+ * 유효한 Supabase 세션을 반환 (없거나 만료됐으면 익명 로그인 후 반환)
+ * 동시에 여러 곳에서 호출해도 하나의 요청만 실제로 전송됨
+ *
+ * @returns {Promise<{access_token, refresh_token, expires_at, user_id}>}
+ */
+async function ensureAuth() {
+  // 이미 진행 중인 인증 요청이 있으면 그 Promise를 그대로 반환 (새 요청 안 보냄)
+  if (_authPromise) {
+    console.log("[Auth] 진행 중인 인증 요청 대기 중...");
+    return _authPromise;
+  }
+  // 완료 후 반드시 null 초기화 (성공/실패 모두)
+  _authPromise = _doEnsureAuth().finally(() => { _authPromise = null; });
+  return _authPromise;
+}
+
+/** ensureAuth 내부 실제 처리 */
+async function _doEnsureAuth() {
+  // 1. 저장된 세션 확인
+  const stored = await chrome.storage.local.get("supabase_session");
+  const session = stored.supabase_session;
+
+  if (session?.access_token) {
+    // expires_at은 Unix 타임스탬프(초) — 60초 버퍼를 두고 만료 여부 판단
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (session.expires_at && session.expires_at > nowSec + 60) {
+      console.log("[Auth] 기존 세션 유효 (만료까지", session.expires_at - nowSec, "초)");
+      return session;
+    }
+    console.log("[Auth] 세션 만료됨. 재로그인 시도...");
+  } else {
+    console.log("[Auth] 저장된 세션 없음. 익명 로그인 시도...");
+  }
+
+  // 2. 익명 로그인 (1차: /auth/v1/signup)
+  return await _signInAnonymously();
+}
+
+/** 1차 익명 로그인 시도: POST /auth/v1/signup with empty body */
+async function _signInAnonymously() {
+  const endpoint = `${SUPABASE_PROJECT_URL}/auth/v1/signup`;
+  console.log("[Auth] 1차 익명 로그인 요청:", endpoint);
+
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch (networkErr) {
+    console.error("[Auth] 1차 네트워크 오류:", networkErr);
+    throw new Error("인증 서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+  }
+
+  const raw = await response.text();
+  // 첫 로그인 시 응답 전체를 출력해서 디버깅 가능하도록
+  console.log("[Auth] 1차 응답 상태:", response.status);
+  console.log("[Auth] 1차 응답 전체:", raw);
+
+  let data;
+  try { data = JSON.parse(raw); } catch { data = {}; }
+
+  if (response.ok && data.access_token) {
+    return _saveAndReturnSession(data);
+  }
+
+  // 1차 실패 → 2차 폴백 시도
+  console.log("[Auth] 1차 실패. 폴백(/auth/v1/token?grant_type=anonymous) 시도...");
+  return await _signInAnonymouslyFallback();
+}
+
+/** 2차 폴백 익명 로그인: POST /auth/v1/token?grant_type=anonymous */
+async function _signInAnonymouslyFallback() {
+  const endpoint = `${SUPABASE_PROJECT_URL}/auth/v1/token?grant_type=anonymous`;
+  console.log("[Auth] 2차 익명 로그인 요청:", endpoint);
+
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch (networkErr) {
+    console.error("[Auth] 2차 네트워크 오류:", networkErr);
+    throw new Error("인증 서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+  }
+
+  const raw = await response.text();
+  console.log("[Auth] 2차 응답 상태:", response.status);
+  console.log("[Auth] 2차 응답 전체:", raw);
+
+  let data;
+  try { data = JSON.parse(raw); } catch { data = {}; }
+
+  if (!response.ok || !data.access_token) {
+    const reason = data.message ?? data.error_description ?? data.error ?? JSON.stringify(data);
+    throw new Error("익명 로그인에 실패했습니다: " + reason);
+  }
+
+  return _saveAndReturnSession(data);
+}
+
+/** 세션 객체 정리 후 storage 저장 + 반환 */
+async function _saveAndReturnSession(data) {
+  const session = {
+    access_token:  data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at:    data.expires_at,
+    user_id:       data.user?.id,
+  };
+  console.log("[Auth] 익명 로그인 성공 | user_id:", session.user_id, "| expires_at:", session.expires_at);
+  await chrome.storage.local.set({ supabase_session: session });
+  return session;
+}
+
+/** ── 인증 헤더 포함 API 호출 헬퍼 ── */
+
+/**
+ * Authorization 헤더를 자동 주입해 백엔드 API를 호출합니다.
+ * - 401 응답 시: 세션 삭제 후 재인증 → 1회 재시도
+ * - 429 응답 시: 사용량 초과 메시지로 throw
+ *
+ * @param {string} url
+ * @param {RequestInit} options  - headers에 Content-Type 등 포함
+ * @param {boolean} [retried]   - 내부 재시도 플래그 (외부에서 사용 X)
+ * @returns {Promise<Response>}  - 2xx ~ 5xx 응답 객체 (401/429 제외)
+ */
+async function callBackendAPI(url, options, retried = false) {
+  const session = await ensureAuth();
+
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      "Authorization": `Bearer ${session.access_token}`,
+    },
+  });
+
+  // 401: 토큰 만료 → 세션 삭제 후 재인증 1회
+  if (response.status === 401 && !retried) {
+    console.warn("[Auth] 401 응답 → 세션 삭제 후 재인증 시도...");
+    await chrome.storage.local.remove("supabase_session");
+    _authPromise = null;
+    return callBackendAPI(url, options, true);
+  }
+
+  // 429: 사용량 초과 → 친절한 한국어 메시지로 throw
+  if (response.status === 429) {
+    const errBody = await response.json().catch(() => ({}));
+    console.error("[API] 429 사용량 초과:", errBody);
+    const used  = errBody.used  ?? "?";
+    const limit = errBody.limit ?? "?";
+    throw new Error(`오늘 사용량을 초과했습니다 (${used}/${limit}회). 내일 다시 시도해주세요.`);
+  }
+
+  return response;
+}
+
 /** ── 메시지 라우터 ── */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
@@ -200,14 +370,18 @@ async function callWhisperAPI(audioBase64, mimeType) {
 
   let response;
   try {
-    response = await fetch(`${BACKEND_URL}/api/transcribe`, {
+    response = await callBackendAPI(`${BACKEND_URL}/api/transcribe`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ audio: audioBase64 }),
     });
-  } catch (networkErr) {
-    console.error("[Transcribe] 네트워크 오류:", networkErr);
-    throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+  } catch (err) {
+    // TypeError = fetch 자체 실패 (네트워크 오류)
+    if (err instanceof TypeError) {
+      console.error("[Transcribe] 네트워크 오류:", err);
+      throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+    }
+    throw err; // 429 등 callBackendAPI에서 이미 포맷된 에러는 그대로 전파
   }
 
   console.log("[Transcribe] 응답 상태:", response.status);
@@ -249,14 +423,17 @@ async function parseIntent(text) {
 
   let response;
   try {
-    response = await fetch(`${BACKEND_URL}/api/parse-intent`, {
+    response = await callBackendAPI(`${BACKEND_URL}/api/parse-intent`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-  } catch (networkErr) {
-    console.error("[Intent] 네트워크 오류:", networkErr);
-    throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+  } catch (err) {
+    if (err instanceof TypeError) {
+      console.error("[Intent] 네트워크 오류:", err);
+      throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+    }
+    throw err;
   }
 
   console.log("[Intent] 응답 상태:", response.status);
@@ -585,14 +762,17 @@ async function executeYouTubePlay(query) {
 
   let response;
   try {
-    response = await fetch(`${BACKEND_URL}/api/youtube-search`, {
+    response = await callBackendAPI(`${BACKEND_URL}/api/youtube-search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query }),
     });
-  } catch (networkErr) {
-    console.error("[YouTube] 네트워크 오류:", networkErr);
-    throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+  } catch (err) {
+    if (err instanceof TypeError) {
+      console.error("[YouTube] 네트워크 오류:", err);
+      throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+    }
+    throw err;
   }
 
   console.log("[YouTube] 응답 상태:", response.status);

@@ -14,7 +14,8 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "https://voice-browser-backend-youngho.vercel.app/*"
+    "https://voice-browser-backend-youngho.vercel.app/*",
+    "https://uhqesvkydcziaefwbdjx.supabase.co/*"
   ],
 
   "background": {
