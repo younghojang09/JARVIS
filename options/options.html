@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Voice Browser 설정</title>
+  <title>JARVIS 설정</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -99,6 +99,108 @@
       50%       { opacity: 0.4; }
     }
 
+    /* ── 설정 행 ── */
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .setting-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1;
+    }
+    .setting-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: #e8e8f0;
+    }
+    .setting-desc {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    /* ── 토글 스위치 ── */
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: #2a2a3a;
+      border-radius: 12px;
+      transition: background 0.2s;
+    }
+    .toggle-track::after {
+      content: "";
+      position: absolute;
+      left: 3px; top: 3px;
+      width: 18px; height: 18px;
+      background: #6b7280;
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle input:checked + .toggle-track { background: #065f46; }
+    .toggle input:checked + .toggle-track::after {
+      transform: translateX(20px);
+      background: #10B981;
+    }
+
+    /* ── 슬라이더 ── */
+    .slider-row { display: flex; flex-direction: column; gap: 8px; }
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .slider-value {
+      font-size: 13px;
+      font-weight: 600;
+      color: #10B981;
+      min-width: 36px;
+      text-align: right;
+    }
+    input[type="range"] {
+      width: 100%;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      background: #2a2a3a;
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      background: #10B981;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    /* ── 테스트 버튼 ── */
+    .test-btn {
+      width: 100%;
+      padding: 10px;
+      background: transparent;
+      border: 1px solid #2a2a3a;
+      border-radius: 8px;
+      color: #34D399;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .test-btn:hover { background: #0d2418; border-color: #065f46; }
+    .test-btn:active { background: #065f46; }
+
     /* ── 주의사항 ── */
     .notice {
       padding: 12px 14px;
@@ -115,8 +217,8 @@
   <div class="page">
 
     <header class="page-header">
-      <h1>⚙️ Voice Browser 설정</h1>
-      <p>Voice Browser 확장 프로그램 정보</p>
+      <h1>⚙️ JARVIS 설정</h1>
+      <p>JARVIS 확장 프로그램 정보</p>
     </header>
 
     <!-- 안내 카드 -->
@@ -141,11 +243,84 @@
       </div>
     </div>
 
+    <!-- 음성 응답 설정 카드 -->
+    <div class="card">
+      <div class="card-title">음성 응답 설정</div>
+
+      <!-- 음성 읽기 토글 -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">음성으로 결과 읽기</span>
+          <span class="setting-desc">명령 실행 결과를 한국어 음성으로 읽어줍니다</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="ttsEnabled" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
+      <!-- OpenAI TTS 안내 -->
+      <div class="notice" style="margin: 0;">
+        🎙️ OpenAI 자연어 음성(nova)을 사용합니다. 인터넷 연결이 필요합니다.
+      </div>
+
+      <!-- 음성 테스트 버튼 -->
+      <button class="test-btn" id="ttsTestBtn">🔊 음성 테스트</button>
+    </div>
+
+    <!-- 대화 컨텍스트 설정 카드 -->
+    <div class="card">
+      <div class="card-title">대화 컨텍스트</div>
+
+      <!-- 컨텍스트 기억 토글 -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">컨텍스트 기억 사용</span>
+          <span class="setting-desc">이전 명령을 기억해서 "거기서", "방금 그거" 같은 표현을 이해합니다</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="conversationEnabled" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
+      <!-- 안내 -->
+      <div class="notice" style="margin: 0;">
+        ℹ️ 최근 5개 명령까지 기억합니다. 다른 사람이 사용할 때는 기록을 지우세요.
+      </div>
+
+      <!-- 대화 기록 지우기 버튼 -->
+      <button class="test-btn" id="clearHistoryBtn">🗑️ 대화 기록 지우기</button>
+    </div>
+
+    <!-- 키보드 단축키 안내 카드 -->
+    <div class="card">
+      <div class="card-title">키보드 단축키</div>
+
+      <div class="setting-row" style="align-items: flex-start;">
+        <div class="setting-info">
+          <span class="setting-label">음성 명령 시작</span>
+          <span class="setting-desc">팝업을 열지 않아도 어느 페이지에서나 바로 녹음을 시작합니다</span>
+        </div>
+        <span style="font-size:13px; font-weight:700; color:#10B981;
+                     background:#0d2418; border:1px solid #065f46;
+                     border-radius:6px; padding:4px 10px; flex-shrink:0;
+                     white-space:nowrap;">
+          Ctrl+Shift+1
+        </span>
+      </div>
+
+      <div class="notice" style="margin: 0;">
+        ⌨️ 단축키 변경은 <strong>chrome://extensions/shortcuts</strong> 에서 가능합니다.
+      </div>
+    </div>
+
     <!-- 안내 -->
     <div class="notice">
       ℹ️ 문제가 발생하면 인터넷 연결 상태를 확인하거나, 잠시 후 다시 시도해주세요.
     </div>
 
   </div>
+  <script src="options.js"></script>
 </body>
 </html>

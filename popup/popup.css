@@ -159,6 +159,38 @@ body {
   font-style: italic;
 }
 
+/* ── 백그라운드 탭 안내 배너 ── */
+.info-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 7px 12px;
+  background: #0d2418;
+  border: 1px solid #065f46;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: #6ee7b7;
+}
+
+.info-banner-text {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.info-banner-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #34D399;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.info-banner-close:hover { opacity: 1; }
+
 /* ── 마이크 섹션 ── */
 .mic-section {
   display: flex;
@@ -330,7 +362,10 @@ body {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-2);
-  line-height: 1.4;
+  line-height: 1.6;
+  white-space: pre-line; /* 멀티 결과 \n 줄바꿈 지원 */
+  max-height: 200px;
+  overflow-y: auto;      /* 요약 등 긴 결과 스크롤 */
 }
 .action-result-msg.success { color: var(--green); }
 .action-result-msg.failure { color: var(--red); }
@@ -448,6 +483,71 @@ body {
   font-size: 10px;
   color: var(--text-3);
   flex-shrink: 0;
+}
+
+/* ── 텍스트 명령 입력 ── */
+.text-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.divider-text {
+  font-size: 11px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.text-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.text-cmd-input {
+  flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--trans);
+}
+
+.text-cmd-input::placeholder { color: var(--text-3); }
+.text-cmd-input:focus { border-color: var(--accent); }
+
+.text-cmd-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--trans), transform var(--trans);
+}
+
+.text-cmd-btn:hover  { background: #0ea572; }
+.text-cmd-btn:active { transform: scale(0.92); }
+.text-cmd-btn:disabled {
+  background: var(--border);
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* ── 유틸 ── */

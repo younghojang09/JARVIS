@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Voice Browser</title>
+  <title>JARVIS</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
     <header class="header">
       <div class="header-brand">
         <div class="brand-dot"></div>
-        <span class="brand-name">Voice Browser</span>
+        <span class="brand-name">JARVIS</span>
       </div>
       <a href="../options/options.html" target="_blank" class="settings-btn" title="설정">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -60,6 +60,12 @@
       <span class="example-text" id="exampleText">"유튜브 열어줘"</span>
     </div>
 
+    <!-- 백그라운드 탭 안내 배너 (첫 실행 시 한 번만 표시) -->
+    <div class="info-banner hidden" id="infoBanner">
+      <span class="info-banner-text">💡 새 탭은 백그라운드로 열립니다. 명령 완료 후 탭을 확인하세요.</span>
+      <button class="info-banner-close" id="infoBannerClose" aria-label="닫기">×</button>
+    </div>
+
     <!-- 마이크 섹션 -->
     <div class="mic-section">
       <div class="mic-wrapper">
@@ -76,6 +82,25 @@
       </div>
       <canvas class="waveform-canvas hidden" id="waveformCanvas"></canvas>
       <p class="mic-hint" id="micHint">버튼을 눌러 말하세요</p>
+    </div>
+
+    <!-- 텍스트 명령 입력 -->
+    <div class="text-divider">
+      <span class="divider-line"></span>
+      <span class="divider-text">또는</span>
+      <span class="divider-line"></span>
+    </div>
+
+    <div class="text-input-row">
+      <input type="text" class="text-cmd-input" id="textCmdInput"
+             placeholder="여기에 명령을 입력하세요" autocomplete="off" />
+      <button class="text-cmd-btn" id="textCmdBtn" aria-label="명령 실행">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 인식된 텍스트 카드 -->

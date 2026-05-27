@@ -7,6 +7,11 @@ const SUPABASE_PROJECT_URL = "https://uhqesvkydcziaefwbdjx.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_q3Iw5g8Q8ibAmRJ0Anl8RA_k-JvaELv";
 /** 백엔드 서버 base URL (API 키는 모두 서버에서 관리) */
 const BACKEND_URL = "https://voice-browser-backend-youngho.vercel.app";
+/** 대화 히스토리 최대 유지 턴 수 (user + assistant 쌍) */
+const MAX_CONV_TURNS = 5;
+
+/** 확장이 마지막으로 열었던 탭 ID — use_current_tab 요청 시 재사용 */
+let lastUsedTabId = null;
 
 /** ── 브라우저 제어 도구 정의 (문서/참조용 — 실제 Claude 호출은 백엔드에서 수행) ── */
 const BROWSER_TOOLS = [
@@ -17,6 +22,7 @@ const BROWSER_TOOLS = [
       type: "object",
       properties: {
         url: { type: "string", description: "열 URL (https:// 포함 전체 주소)" },
+        use_current_tab: { type: "boolean", description: "true이면 마지막으로 사용한 탭에서 열기" },
       },
       required: ["url"],
     },
@@ -28,6 +34,7 @@ const BROWSER_TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "검색할 내용" },
+        use_current_tab: { type: "boolean", description: "true이면 마지막으로 사용한 탭에서 열기" },
       },
       required: ["query"],
     },
@@ -74,6 +81,31 @@ const BROWSER_TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "검색어. 예: '아이유 좋은날'" },
+        use_current_tab: { type: "boolean", description: "true이면 마지막으로 사용한 탭에서 열기" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "youtube_search",
+    description: "유튜브에서 검색어로 검색 결과 페이지를 엽니다 (자동 재생 없이 검색 결과만 표시).",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "유튜브에서 검색할 내용" },
+        use_current_tab: { type: "boolean", description: "true이면 마지막으로 사용한 탭에서 열기" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "naver_search",
+    description: "네이버에서 검색어로 검색 결과 페이지를 엽니다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "네이버에서 검색할 내용" },
+        use_current_tab: { type: "boolean", description: "true이면 마지막으로 사용한 탭에서 열기" },
       },
       required: ["query"],
     },
@@ -121,6 +153,11 @@ const BROWSER_TOOLS = [
   {
     name: "capture_screenshot",
     description: "현재 보이는 탭의 화면을 캡처해서 다운로드합니다.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "summarize_page",
+    description: "현재 보고 있는 페이지의 내용을 요약합니다. '이 페이지 요약해줘', '이거 뭐에 관한 거야', '요약해줘' 같은 표현에 사용합니다.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -302,6 +339,48 @@ async function callBackendAPI(url, options, retried = false) {
   return response;
 }
 
+/** ── 대화 히스토리 관리 ── */
+
+/**
+ * chrome.storage에 저장된 대화 히스토리를 반환
+ * @returns {Promise<Array>} Claude API messages 형식 배열
+ */
+async function getConversationHistory() {
+  const { conversation_history = [] } = await chrome.storage.local.get("conversation_history");
+  return conversation_history;
+}
+
+/**
+ * 이번 턴의 user + assistant 메시지를 히스토리에 추가
+ * MAX_CONV_TURNS 초과 시 가장 오래된 턴부터 제거
+ *
+ * @param {string} userMessage       - 사용자 발화 텍스트
+ * @param {Array}  assistantContent  - Claude tool_use 블록 배열
+ */
+async function appendToHistory(userMessage, assistantContent) {
+  const history = await getConversationHistory();
+
+  history.push({ role: "user",      content: userMessage });
+  history.push({ role: "assistant", content: assistantContent });
+
+  // 오래된 턴 제거 (user + assistant 쌍 단위로 앞에서 삭제)
+  while (history.length > MAX_CONV_TURNS * 2) {
+    history.shift();
+    history.shift();
+  }
+
+  await chrome.storage.local.set({ conversation_history: history });
+  console.log("[History] 저장 완료 | 현재 턴 수:", history.length / 2);
+}
+
+/**
+ * 대화 히스토리 전체 초기화
+ */
+async function clearHistory() {
+  await chrome.storage.local.remove("conversation_history");
+  console.log("[History] 대화 기록 초기화 완료");
+}
+
 /** ── 메시지 라우터 ── */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
@@ -346,6 +425,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     executeAction(message.tool, message.input)
       .then((msg) => sendResponse({ ok: true, message: msg }))
       .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === "GENERATE_SPEECH") {
+    generateSpeech(message.text)
+      .then(sendResponse)
+      .catch((err) => {
+        console.error("[Background] GENERATE_SPEECH 오류:", err);
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
+
+  if (message.type === "CLEAR_HISTORY") {
+    clearHistory()
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => {
+        console.error("[Background] CLEAR_HISTORY 오류:", err);
+        sendResponse({ success: false, error: err.message });
+      });
     return true;
   }
 });
@@ -419,14 +518,18 @@ async function callWhisperAPI(audioBase64, mimeType) {
  * @returns {Promise<IntentResult>}
  */
 async function parseIntent(text) {
-  console.log("[Intent] 백엔드 호출 시작 | 텍스트:", text);
+  // 컨텍스트 기억 사용 여부 + 이전 히스토리 로드
+  const { conversation_enabled = true } = await chrome.storage.local.get("conversation_enabled");
+  const history = conversation_enabled ? await getConversationHistory() : [];
+
+  console.log("[Intent] 백엔드 호출 시작 | 텍스트:", text, "| 히스토리 턴 수:", history.length / 2);
 
   let response;
   try {
     response = await callBackendAPI(`${BACKEND_URL}/api/parse-intent`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, history }),
     });
   } catch (err) {
     if (err instanceof TypeError) {
@@ -447,18 +550,25 @@ async function parseIntent(text) {
   const data = await response.json();
   console.log("[Intent] 응답:", data);
 
-  const { tool, input } = data;
-  if (!tool) {
+  const tools = data.tools ?? [];
+  if (!tools.length) {
     throw new Error("백엔드가 도구를 반환하지 않았습니다. 다시 시도해주세요.");
   }
 
-  console.log("[Intent] 선택된 도구:", tool, "| 입력:", JSON.stringify(input));
+  console.log("[Intent] 도구 수:", tools.length, "|", tools.map(t => t.name).join(", "));
 
-  return {
-    tool,
-    input,
-    intentLabel: formatIntentLabel(tool, input),
-  };
+  // 이번 턴을 히스토리에 추가 (컨텍스트 기억 ON일 때만, 멀티 tool_use 블록 지원)
+  if (conversation_enabled) {
+    const assistantContent = tools.map((t, i) => ({
+      type:  "tool_use",
+      id:    `toolu_${Date.now()}_${i}`,
+      name:  t.name,
+      input: t.input,
+    }));
+    await appendToHistory(text, assistantContent);
+  }
+
+  return { tools };
 }
 
 /**
@@ -477,6 +587,8 @@ function formatIntentLabel(tool, input) {
     case "navigate_forward":  return "➡️ 앞으로가기";
     case "scroll_page":       return scrollLabel(input.direction);
     case "play_youtube":      return `▶ "${input.query}" 재생`;
+    case "youtube_search":    return `🔍 유튜브: "${input.query}" 검색`;
+    case "naver_search":      return `🔍 네이버: "${input.query}" 검색`;
     case "refresh_page":      return "🔄 페이지 새로고침";
     case "next_tab":          return "→ 다음 탭";
     case "previous_tab":      return "← 이전 탭";
@@ -486,6 +598,7 @@ function formatIntentLabel(tool, input) {
     case "bookmark_current":  return "🔖 현재 페이지 북마크 추가";
     case "mute_tab":           return "🔇 탭 음소거 전환";
     case "capture_screenshot": return "📸 화면 캡처";
+    case "summarize_page":     return "📄 페이지 요약";
     case "unknown_command":    return `❓ 이해 불가: ${input.reason}`;
     default:                  return `${tool}: ${JSON.stringify(input)}`;
   }
@@ -501,52 +614,146 @@ function scrollLabel(direction) {
   }
 }
 
+/** ── 멀티 도구 순차 실행 ── */
+
+/**
+ * 도구 배열을 순서대로 실행하고 각 결과를 수집.
+ * 한 도구가 실패해도 다음 도구는 계속 시도.
+ * 도구 사이에 300ms 지연을 두어 자연스러운 UX 제공.
+ *
+ * @param {Array<{name:string, input:Object}>} tools
+ * @param {Function} onProgress - ({current, total, toolName}) 콜백
+ * @returns {Promise<Array<{tool, input, success, message}>>}
+ */
+async function executeToolsSequentially(tools, onProgress) {
+  const results = [];
+
+  for (let i = 0; i < tools.length; i++) {
+    const { name, input } = tools[i];
+
+    onProgress({ current: i + 1, total: tools.length, toolName: name });
+    console.log(`[Multi] ${i + 1}/${tools.length}: ${name} 실행 중`);
+
+    try {
+      const message = await executeAction(name, input);
+      results.push({ tool: name, input, success: true, message });
+      console.log(`[Multi] ${i + 1}/${tools.length}: 완료 — ${message}`);
+    } catch (err) {
+      results.push({ tool: name, input, success: false, message: err.message });
+      console.error(`[Multi] ${i + 1}/${tools.length}: 실패 — ${err.message}`);
+    }
+
+    // 마지막 도구 제외하고 지연 (UX 자연스럽게)
+    if (i < tools.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+
+  const successCount = results.filter((r) => r.success).length;
+  console.log(`[Multi] 전체 완료: ${tools.length}개 중 ${successCount}개 성공`);
+
+  return results;
+}
+
+/**
+ * 의도 레이블 앞의 이모지·특수기호 토큰을 제거해 짧은 텍스트 반환
+ * 예: "🔍 \"BTS\" 검색" → '"BTS" 검색'
+ * 예: "✖️ 현재 탭 닫기"  → "현재 탭 닫기"
+ *
+ * @param {string} label
+ * @returns {string}
+ */
+function shortIntentLabel(label) {
+  const parts = label.split(" ");
+  // 첫 토큰에 한글이나 영숫자가 없으면 이모지·기호 토큰으로 판단해 제거
+  if (parts.length > 1 && !/[가-힣\w]/.test(parts[0])) {
+    return parts.slice(1).join(" ");
+  }
+  return label;
+}
+
+/**
+ * 실행 결과 배열을 한 줄 요약 메시지로 변환 (TTS/UI 공용)
+ *
+ * @param {Array<{success, message, tool}>} results
+ * @param {Array<string>} intentLabels - formatIntentLabel()로 생성된 레이블 배열
+ * @returns {string}
+ */
+function summarizeResults(results, intentLabels = []) {
+  const n         = results.length;
+  const successes = results.filter((r) => r.success);
+  const failures  = results.filter((r) => !r.success);
+
+  // 단일 결과: 메시지 그대로
+  if (n === 1) return results[0].message;
+
+  // 전체 성공
+  if (failures.length === 0) {
+    return `${n}개 명령을 모두 완료했습니다`;
+  }
+
+  // 전체 실패
+  if (successes.length === 0) {
+    return `${n}개 명령이 모두 실패했습니다`;
+  }
+
+  // 부분 실패: 실패한 첫 번째 항목의 레이블 포함
+  const firstFailIdx = results.indexOf(failures[0]);
+  const failLabel    = shortIntentLabel(intentLabels[firstFailIdx] ?? failures[0].tool);
+  const moreText     = failures.length > 1 ? ` 외 ${failures.length - 1}개` : "";
+  return `${successes.length}개 성공, ${failures.length}개 실패 (${failLabel}${moreText})`;
+}
+
 /** ── 의도 파악 + 실행 통합 ── */
 
 /**
- * 텍스트 명령을 파싱하고 바로 실행까지 수행
- * unknown_command나 실행 실패는 throw 대신 success:false로 반환
+ * 텍스트 명령을 파싱하고 도구를 순차 실행.
+ * 반환 형식:
+ * { success, isUnknown, tools, results, intentLabels, message }
  *
  * @param {string} text
- * @returns {Promise<{success, isUnknown, tool, input, intentLabel, message}>}
  */
 async function processCommand(text) {
   console.log("[processCommand] 시작:", text);
 
-  const intent = await parseIntent(text); // 실패 시 throw → 메시지 핸들러가 error로 반환
-  console.log("[processCommand] 의도 파악 완료:", intent.tool, intent.input);
+  const { tools } = await parseIntent(text); // 실패 시 throw → 핸들러가 error로 반환
+  console.log("[processCommand] 의도 파악 완료:", tools.length, "개 도구");
 
-  if (intent.tool === "unknown_command") {
+  // unknown_command 처리 (단일 도구일 때만 발생)
+  if (tools.length === 1 && tools[0].name === "unknown_command") {
+    const t = tools[0];
+    const msg = `이해하지 못했습니다: ${t.input?.reason ?? "알 수 없는 이유"}`;
     return {
-      success: false,
-      isUnknown: true,
-      tool: intent.tool,
-      input: intent.input,
-      intentLabel: intent.intentLabel,
-      message: `이해하지 못했습니다: ${intent.input.reason}`,
+      success:      false,
+      isUnknown:    true,
+      tools,
+      results:      [{ tool: t.name, input: t.input, success: false, message: msg }],
+      intentLabels: [formatIntentLabel(t.name, t.input)],
+      message:      msg,
     };
   }
 
-  try {
-    const executionMsg = await executeAction(intent.tool, intent.input);
-    console.log("[processCommand] 실행 완료:", executionMsg);
-    return {
-      success: true,
-      tool: intent.tool,
-      input: intent.input,
-      intentLabel: intent.intentLabel,
-      message: `✓ ${executionMsg}`,
-    };
-  } catch (execErr) {
-    console.error("[processCommand] 실행 오류:", execErr.message);
-    return {
-      success: false,
-      tool: intent.tool,
-      input: intent.input,
-      intentLabel: intent.intentLabel,
-      message: execErr.message,
-    };
-  }
+  console.log("[Multi] 실행 시작:", tools.length, "개 도구");
+
+  const results = await executeToolsSequentially(tools, (progress) => {
+    // 팝업으로 진행 상황 전달 (팝업이 닫혔으면 무시)
+    chrome.runtime.sendMessage({ type: "PROGRESS_UPDATE", ...progress })
+      .catch(() => {});
+  });
+
+  const allSuccess   = results.every((r) => r.success);
+  // intentLabels를 먼저 계산해서 summarizeResults에 전달 (부분 실패 시 도구명 포함)
+  const intentLabels = tools.map((t) => formatIntentLabel(t.name, t.input));
+  const summary      = summarizeResults(results, intentLabels);
+
+  return {
+    success:  allSuccess,
+    isUnknown: false,
+    tools,
+    results,
+    intentLabels,
+    message:  allSuccess ? `✓ ${summary}` : summary,
+  };
 }
 
 /** ── 액션 실행 ── */
@@ -566,22 +773,37 @@ async function executeAction(tool, input) {
 
     case "open_url": {
       const url = normalizeUrl(input.url);
-      await chrome.tabs.create({ url, active: true });
-      console.log("[Action] open_url 완료:", url);
-      return `새 탭에서 열었습니다: ${url}`;
+      // use_current_tab이 true이고 이전 탭이 살아있으면 URL 변경, 아니면 새 탭 생성
+      if (input.use_current_tab && lastUsedTabId && await isTabAlive(lastUsedTabId)) {
+        await chrome.tabs.update(lastUsedTabId, { url, active: false });
+        console.log("[Action] open_url 완료 (기존 탭 변경):", url);
+        return `기존 탭에서 열었습니다: ${url}`;
+      }
+      const tab = await chrome.tabs.create({ url, active: false });
+      lastUsedTabId = tab.id;
+      console.log("[Action] open_url 완료 (백그라운드):", url);
+      return `백그라운드 탭에서 열었습니다: ${url}`;
     }
 
     case "search_web": {
       const url = `https://www.google.com/search?q=${encodeURIComponent(input.query)}`;
-      await chrome.tabs.create({ url, active: true });
-      console.log("[Action] search_web 완료:", input.query);
-      return `"${input.query}" 검색 결과를 열었습니다`;
+      // use_current_tab이 true이고 이전 탭이 살아있으면 URL 변경, 아니면 새 탭 생성
+      if (input.use_current_tab && lastUsedTabId && await isTabAlive(lastUsedTabId)) {
+        await chrome.tabs.update(lastUsedTabId, { url, active: false });
+        console.log("[Action] search_web 완료 (기존 탭 변경):", input.query);
+        return `"${input.query}" 검색 결과를 기존 탭에서 열었습니다`;
+      }
+      const tab = await chrome.tabs.create({ url, active: false });
+      lastUsedTabId = tab.id;
+      console.log("[Action] search_web 완료 (백그라운드):", input.query);
+      return `"${input.query}" 검색 결과를 새 탭에서 열었습니다`;
     }
 
     case "open_new_tab": {
-      await chrome.tabs.create({ active: true });
-      console.log("[Action] open_new_tab 완료");
-      return "새 탭을 열었습니다";
+      // 팝업 포커스 유지를 위해 백그라운드로 열기
+      await chrome.tabs.create({ active: false });
+      console.log("[Action] open_new_tab 완료 (백그라운드)");
+      return "새 탭을 백그라운드에서 열었습니다";
     }
 
     case "close_current_tab": {
@@ -652,7 +874,15 @@ async function executeAction(tool, input) {
     }
 
     case "play_youtube": {
-      return await executeYouTubePlay(input.query);
+      return await executeYouTubePlay(input.query, input.use_current_tab);
+    }
+
+    case "youtube_search": {
+      return await executeYoutubeSearch(input);
+    }
+
+    case "naver_search": {
+      return await executeNaverSearch(input);
     }
 
     case "refresh_page": {
@@ -739,6 +969,10 @@ async function executeAction(tool, input) {
       return await executeCaptureScreenshot();
     }
 
+    case "summarize_page": {
+      return await executeSummarizePage();
+    }
+
     case "unknown_command":
       // processCommand에서 이미 처리 — 여기까지 오지 않음
       console.warn("[Action] unknown_command가 executeAction에 전달됨 (예상치 못한 경로)");
@@ -752,12 +986,13 @@ async function executeAction(tool, input) {
 /** ── YouTube 재생 (백엔드 /api/youtube-search 호출) ── */
 
 /**
- * 백엔드에 검색어를 보내 첫 번째 영상 URL을 받아 새 탭에서 자동 재생
+ * 백엔드에 검색어를 보내 첫 번째 영상 URL을 받아 탭에서 자동 재생
  *
- * @param {string} query - 검색어 (예: "아이유 좋은날")
+ * @param {string}  query         - 검색어 (예: "아이유 좋은날")
+ * @param {boolean} useCurrentTab - true이면 마지막 탭 재사용, false이면 새 탭 생성
  * @returns {Promise<string>} 성공 메시지 (영상 제목 포함)
  */
-async function executeYouTubePlay(query) {
+async function executeYouTubePlay(query, useCurrentTab = false) {
   console.log("[YouTube] 백엔드 호출 시작 | 검색어:", query);
 
   let response;
@@ -791,10 +1026,17 @@ async function executeYouTubePlay(query) {
     throw new Error(`"${query}" 검색 결과를 찾을 수 없습니다.`);
   }
 
-  await chrome.tabs.create({ url, active: true });
-  console.log("[YouTube] 재생 탭 열기 완료 | 제목:", title, "| URL:", url);
+  // use_current_tab이 true이고 이전 탭이 살아있으면 URL 변경, 아니면 새 탭 생성
+  if (useCurrentTab && lastUsedTabId && await isTabAlive(lastUsedTabId)) {
+    await chrome.tabs.update(lastUsedTabId, { url, active: false });
+    console.log("[YouTube] 기존 탭에서 재생 | 제목:", title, "| URL:", url);
+  } else {
+    const tab = await chrome.tabs.create({ url, active: false });
+    lastUsedTabId = tab.id;
+    console.log("[YouTube] 재생 탭 열기 완료 (백그라운드) | 제목:", title, "| URL:", url);
+  }
 
-  return `▶ "${title}" 재생 중`;
+  return `▶ "${title}" 재생을 시작했습니다`;
 }
 
 /** ── 스크린샷 캡처 ── */
@@ -851,7 +1093,202 @@ async function executeCaptureScreenshot() {
   return `📸 화면을 캡처해서 다운로드했습니다 (${filename})`;
 }
 
+/** ── 페이지 요약 ── */
+
+/**
+ * 현재 활성 탭의 텍스트를 추출해 백엔드 /api/summarize로 요약 요청
+ * 성공 시 요약 문자열 반환, 실패 시 throw
+ *
+ * @returns {Promise<string>} 요약 텍스트
+ */
+async function executeSummarizePage() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
+
+  // chrome://, chrome-extension://, about: 등 시스템 페이지는 스크립트 주입 불가
+  const url = activeTab.url ?? "";
+  if (
+    url.startsWith("chrome://") ||
+    url.startsWith("chrome-extension://") ||
+    url.startsWith("about:")
+  ) {
+    throw new Error("이 페이지는 요약할 수 없습니다. (시스템 페이지)");
+  }
+
+  // 페이지 텍스트 추출 — article > main > body 순으로 시도
+  let extracted;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: activeTab.id },
+      func: () => {
+        const el =
+          document.querySelector("article") ||
+          document.querySelector("main") ||
+          document.body;
+        return {
+          text:  el.innerText.slice(0, 50000),
+          title: document.title,
+        };
+      },
+    });
+    extracted = results[0]?.result;
+  } catch (err) {
+    console.error("[Summarize] 텍스트 추출 실패:", err.message);
+    throw new Error("이 페이지는 요약할 수 없습니다. (스크립트 주입 불가)");
+  }
+
+  if (!extracted?.text || extracted.text.trim().length < 100) {
+    throw new Error("요약할 내용이 충분하지 않습니다.");
+  }
+
+  console.log("[Summarize] 텍스트 추출 완료 | 길이:", extracted.text.length, "| 제목:", extracted.title);
+
+  // 백엔드 /api/summarize 호출
+  let response;
+  try {
+    response = await callBackendAPI(`${BACKEND_URL}/api/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: extracted.text, title: extracted.title }),
+    });
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error("서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.");
+    }
+    throw err;
+  }
+
+  console.log("[Summarize] 응답 상태:", response.status);
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    console.error("[Summarize] 오류 응답:", errBody);
+    throw new Error(errBody.error ?? `요약 오류 (HTTP ${response.status})`);
+  }
+
+  const data = await response.json();
+  console.log("[Summarize] 요약 완료");
+
+  if (!data.summary) {
+    throw new Error("백엔드가 요약 결과를 반환하지 않았습니다.");
+  }
+
+  return data.summary;
+}
+
+/** ── TTS (백엔드 /api/tts 호출) ── */
+
+/**
+ * 텍스트를 백엔드 OpenAI TTS로 변환해 base64 MP3로 반환
+ * 실패해도 { success: false, error } 형태로 반환 (throw 안 함)
+ *
+ * @param {string} text - 읽어줄 텍스트
+ * @returns {Promise<{success: boolean, audio?: string, error?: string}>}
+ */
+async function generateSpeech(text) {
+  console.log("[TTS] 백엔드 호출 시작 | 텍스트:", text);
+
+  let response;
+  try {
+    response = await callBackendAPI(`${BACKEND_URL}/api/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  } catch (err) {
+    // TypeError = fetch 자체 실패(네트워크), 나머지는 429 등 포맷된 에러
+    const msg = err instanceof TypeError ? "서버에 연결할 수 없습니다." : err.message;
+    console.error("[TTS] 호출 실패:", msg);
+    return { success: false, error: msg };
+  }
+
+  console.log("[TTS] 응답 상태:", response.status);
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    console.error("[TTS] 오류 응답:", errBody);
+    return { success: false, error: errBody.error ?? `TTS 오류 (HTTP ${response.status})` };
+  }
+
+  const data = await response.json();
+  console.log("[TTS] 음성 생성 완료, audio 길이:", data.audio?.length ?? 0);
+
+  if (!data.audio) {
+    return { success: false, error: "백엔드가 audio를 반환하지 않았습니다." };
+  }
+
+  return { success: true, audio: data.audio };
+}
+
+/** ── 유튜브 검색 결과 페이지 열기 ── */
+
+/**
+ * 유튜브 검색 결과 페이지를 탭에서 엽니다 (자동 재생 없음)
+ *
+ * @param {Object}  input
+ * @param {string}  input.query             - 검색어
+ * @param {boolean} [input.use_current_tab] - true이면 마지막 탭 재사용
+ * @returns {Promise<string>} 성공 메시지
+ */
+async function executeYoutubeSearch(input) {
+  const query = input.query;
+  const url   = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+
+  // use_current_tab이 true이고 이전 탭이 살아있으면 URL 변경, 아니면 새 탭 생성
+  if (input.use_current_tab && lastUsedTabId && await isTabAlive(lastUsedTabId)) {
+    await chrome.tabs.update(lastUsedTabId, { url, active: false });
+    console.log("[YoutubeSearch] 기존 탭에서 검색:", query);
+  } else {
+    const tab = await chrome.tabs.create({ url, active: false });
+    lastUsedTabId = tab.id;
+    console.log("[YoutubeSearch] 새 탭에서 검색:", query);
+  }
+
+  return `유튜브에서 "${query}"를 검색했습니다`;
+}
+
+/** ── 네이버 검색 결과 페이지 열기 ── */
+
+/**
+ * 네이버 검색 결과 페이지를 탭에서 엽니다
+ *
+ * @param {Object}  input
+ * @param {string}  input.query             - 검색어
+ * @param {boolean} [input.use_current_tab] - true이면 마지막 탭 재사용
+ * @returns {Promise<string>} 성공 메시지
+ */
+async function executeNaverSearch(input) {
+  const query = input.query;
+  const url   = `https://search.naver.com/search.naver?query=${encodeURIComponent(query)}`;
+
+  // use_current_tab이 true이고 이전 탭이 살아있으면 URL 변경, 아니면 새 탭 생성
+  if (input.use_current_tab && lastUsedTabId && await isTabAlive(lastUsedTabId)) {
+    await chrome.tabs.update(lastUsedTabId, { url, active: false });
+    console.log("[NaverSearch] 기존 탭에서 검색:", query);
+  } else {
+    const tab = await chrome.tabs.create({ url, active: false });
+    lastUsedTabId = tab.id;
+    console.log("[NaverSearch] 새 탭에서 검색:", query);
+  }
+
+  return `네이버에서 "${query}"를 검색했습니다`;
+}
+
 /** ── 유틸 ── */
+
+/**
+ * 탭 ID가 아직 열려 있는지 확인 (닫혔거나 존재하지 않으면 false)
+ * @param {number} tabId
+ * @returns {Promise<boolean>}
+ */
+async function isTabAlive(tabId) {
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * URL에 프로토콜이 없으면 https:// 를 자동으로 붙임
@@ -865,3 +1302,24 @@ function normalizeUrl(url) {
   }
   return url;
 }
+
+/** ── 키보드 단축키 핸들러 ── */
+
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "toggle-voice") return;
+
+  console.log("[Background] 단축키 감지: toggle-voice");
+
+  // 팝업이 열릴 때 자동으로 녹음을 시작하도록 플래그 설정
+  await chrome.storage.local.set({ auto_start_recording: true });
+
+  try {
+    // chrome.action.openPopup()은 Chrome 99+ + 사용자 제스처 컨텍스트에서만 작동
+    await chrome.action.openPopup();
+    console.log("[Background] 팝업 열기 완료");
+  } catch (err) {
+    // 미지원 환경(구버전 Chrome 등)이면 사용자가 직접 팝업을 열어야 함
+    // 플래그는 유지되므로 팝업을 열면 자동 녹음 시작됨
+    console.warn("[Background] openPopup 실패 (팝업 아이콘을 직접 클릭해주세요):", err.message);
+  }
+});

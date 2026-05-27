@@ -35,6 +35,9 @@ const historySection  = document.getElementById("historySection");
 const historyList     = document.getElementById("historyList");
 const historyClearBtn = document.getElementById("historyClearBtn");
 
+const textCmdInput = document.getElementById("textCmdInput");
+const textCmdBtn   = document.getElementById("textCmdBtn");
+
 /** ── 녹음 상태 ── */
 let mediaRecorder          = null;
 let audioChunks            = [];
@@ -179,28 +182,48 @@ function showTranscriptCard(text) {
   transcriptCard.classList.remove("hidden");
 }
 
-function showActionCard(tool, input, intentLabel, execResult) {
-  actionLabel.textContent = intentLabel;
+/**
+ * 실행 결과 카드 표시 (단일/멀티 도구 모두 지원)
+ *
+ * @param {Array<{name,input}>} tools        - 백엔드가 반환한 도구 배열
+ * @param {Array<string>}       intentLabels - 도구별 레이블
+ * @param {Array<{tool,input,success,message}>} results - 실행 결과 배열
+ */
+function showActionCard(tools, intentLabels, results) {
+  const isMulti    = tools.length > 1;
+  const allSuccess = results.length > 0 && results.every((r) => r.success);
+  const isUnknown  = results.some((r) => r.tool === "unknown_command");
 
-  actionRaw.textContent = Object.keys(input).length > 0
-    ? `${tool}(${JSON.stringify(input)})`
-    : `${tool}()`;
+  // 3개 이상이면 "첫번째 + 두번째 외 N개" 형태로 줄여 가독성 유지
+  actionLabel.textContent = intentLabels.length > 2
+    ? `${intentLabels.slice(0, 2).join(" + ")} 외 ${intentLabels.length - 2}개`
+    : intentLabels.join(" + ");
 
-  if (execResult) {
-    actionResult.textContent = execResult.message;
+  // raw: 도구 호출 나열 (멀티면 " | "로 구분)
+  actionRaw.textContent = tools.map((t) =>
+    Object.keys(t.input ?? {}).length > 0
+      ? `${t.name}(${JSON.stringify(t.input)})`
+      : `${t.name}()`
+  ).join("  |  ");
+
+  // 결과 메시지: 멀티면 각 줄에 ✓/✗ 아이콘
+  if (results.length > 0) {
+    actionResult.textContent = isMulti
+      ? results.map((r) => `${r.success ? "✓" : "✗"} ${r.message}`).join("\n")
+      : results[0].message;
+
     actionResult.className = "action-result-msg " +
-      (execResult.isUnknown ? "unknown" : execResult.success ? "success" : "failure");
+      (isUnknown ? "unknown" : allSuccess ? "success" : "failure");
     actionResult.classList.remove("hidden");
   } else {
     actionResult.classList.add("hidden");
   }
 
   actionCard.className = "result-card action-card";
-  if (execResult) {
-    if (execResult.isUnknown)    actionCard.classList.add("unknown");
-    else if (execResult.success) actionCard.classList.add("success");
-    else                         actionCard.classList.add("failure");
-  }
+  if (isUnknown)       actionCard.classList.add("unknown");
+  else if (allSuccess) actionCard.classList.add("success");
+  else                 actionCard.classList.add("failure");
+
   actionCard.classList.remove("hidden");
 }
 
@@ -403,6 +426,7 @@ function handleAudioResponse(response) {
     resetMicButton();
     showErrorCard(response.error);
     setStatus("ERROR");
+    speakResult(response.error);
     return;
   }
 
@@ -424,22 +448,31 @@ function handleCommandResponse(response) {
   if (!response) {
     showErrorCard("응답 없음. 확장 프로그램을 다시 로드해주세요.");
     setStatus("ERROR");
+    speakResult("응답 없음. 확장 프로그램을 다시 로드해주세요.");
     return;
   }
   if (response.error) {
     showErrorCard(response.error);
     setStatus("ERROR");
+    speakResult(response.error);
     return;
   }
 
-  const { tool, input, intentLabel, success, message, isUnknown } = response;
+  const { tools = [], results = [], intentLabels = [], success, message, isUnknown } = response;
 
   console.log(
-    `[Popup] 결과 — 도구: ${tool} | 성공: ${success} | unknown: ${!!isUnknown} | 메시지: ${message}`
+    `[Popup] 결과 — 도구 수: ${tools.length} | 성공: ${success} | unknown: ${!!isUnknown} | 메시지: ${message}`
   );
 
-  showActionCard(tool, input ?? {}, intentLabel, { success, message, isUnknown });
-  saveToHistory(lastTranscriptText, intentLabel, success && !isUnknown);
+  showActionCard(tools, intentLabels, results);
+
+  // 히스토리 레이블: 3개 이상은 "첫번째 + 두번째 외 N개"로 줄임
+  const historyLabel = intentLabels.length > 2
+    ? `${intentLabels.slice(0, 2).join(" + ")} 외 ${intentLabels.length - 2}개`
+    : intentLabels.join(" + ");
+  saveToHistory(lastTranscriptText, historyLabel, success && !isUnknown);
+
+  speakResult(message); // 성공·실패·unknown 모두 결과를 음성으로 읽어줌
 
   if (success && !isUnknown) {
     setStatus("DONE");
@@ -448,10 +481,11 @@ function handleCommandResponse(response) {
   }
 }
 
-/** 마이크 버튼 상태를 처리 완료 상태로 초기화 */
+/** 마이크·텍스트 버튼 상태를 처리 완료 상태로 초기화 */
 function resetMicButton() {
   micBtn.classList.remove("recording", "processing");
   micBtn.disabled = false;
+  textCmdBtn.disabled = false;
 }
 
 /** ── 히스토리 ── */
@@ -466,6 +500,7 @@ async function saveToHistory(text, intentLabel, success) {
   commandHistory.unshift({ text, intentLabel, success, timestamp: Date.now() });
   if (commandHistory.length > MAX_HISTORY) commandHistory.length = MAX_HISTORY;
   await chrome.storage.local.set({ commandHistory });
+  console.log("[History UI] 저장 후 렌더링:", commandHistory.length, "개 항목");
   renderHistory(commandHistory);
 }
 
@@ -496,8 +531,8 @@ function renderHistory(history) {
 function rerunCommand(text) {
   if (isRecording || micBtn.disabled) return;
 
+  clearResults(); // lastTranscriptText = "" 로 초기화하므로, 반드시 그 다음에 설정
   lastTranscriptText = text;
-  clearResults();
   showTranscriptCard(text);
   setStatus("ANALYZING");
   micBtn.classList.add("processing");
@@ -532,8 +567,133 @@ function timeAgo(timestamp) {
   return `${Math.floor(secs / 86400)}일 전`;
 }
 
+/** ── TTS (음성 응답) ── */
+
+/**
+ * 화면 표시용 텍스트에서 이모지·파일명·URL을 제거해 음성 읽기에 적합한 형태로 변환
+ * @param {string} text
+ * @returns {string}
+ */
+function getSpeechText(text) {
+  const result = text
+    .replace(/^[✓✗]\s*/, "")                                    // 앞 체크마크 제거
+    .replace(/\([^)]*\)/g, "")                                    // 괄호 안 내용 제거 (파일명 등)
+    .replace(/https?:\/\/\S+/g, "")                              // URL 제거
+    .replace(/[\u{1F300}-\u{1FFFF}\u{2600}-\u{27BF}]/gu, "")    // 유니코드 이모지 제거
+    .replace(/[✓✗→←↑↓⬆⬇▶◀❓]/g, "")                         // 텍스트 특수 기호 제거
+    .replace(/:\s*$/gm, "")                                       // 끝 콜론 제거
+    .replace(/\s+/g, " ")                                         // 중복 공백 정리
+    .trim();
+  // 정리 후 빈 문자열이면 원본 반환
+  return result || text;
+}
+
+/**
+ * TTS가 활성화된 경우 background에 음성 생성을 요청하고 MP3를 재생.
+ * TTS 실패는 조용히 무시 — 화면 표시에 영향 없음.
+ *
+ * @param {string} text - 읽어줄 텍스트
+ */
+async function speakResult(text) {
+  try {
+    const { tts_enabled = true } = await chrome.storage.local.get("tts_enabled");
+    if (!tts_enabled) return;
+
+    let speechText = getSpeechText(text);
+    if (!speechText) return;
+
+    // 요약 등 긴 텍스트는 앞 300자(문장 단위)만 TTS로 읽음
+    if (speechText.length > 300) {
+      const cut = speechText.slice(0, 300).replace(/[^.!?\n]*$/, "").trim();
+      speechText = cut || speechText.slice(0, 300);
+      console.log("[TTS] 긴 텍스트 잘림:", speechText.length, "자");
+    }
+
+    console.log("[TTS] 음성 생성 요청:", speechText);
+
+    chrome.runtime.sendMessage(
+      { type: "GENERATE_SPEECH", text: speechText },
+      (response) => {
+        if (!response?.success) {
+          console.error("[TTS] 생성 실패:", response?.error);
+          return;
+        }
+        playAudio(response.audio);
+      }
+    );
+  } catch (err) {
+    console.warn("[TTS] 오류 (무시됨):", err.message);
+  }
+}
+
+/**
+ * base64 MP3를 Audio 객체로 재생.
+ * 이미 재생 중인 오디오가 있으면 먼저 정지.
+ *
+ * @param {string} base64Mp3
+ */
+function playAudio(base64Mp3) {
+  if (window.currentAudio) {
+    window.currentAudio.pause();
+    window.currentAudio = null;
+  }
+
+  const audio = new Audio("data:audio/mp3;base64," + base64Mp3);
+  audio.volume = 0.9;
+  window.currentAudio = audio;
+
+  audio.play().catch((err) => {
+    console.warn("[TTS] 재생 실패 (무시됨):", err.message);
+  });
+
+  console.log("[TTS] 재생 시작");
+}
+
+/** ── 멀티 명령 진행 상황 ── */
+
+/** 도구 이름을 한국어 짧은 표현으로 변환 */
+function formatToolNameKorean(toolName) {
+  const map = {
+    open_url:          "URL 열기",
+    search_web:        "검색",
+    open_new_tab:      "새 탭",
+    close_current_tab: "탭 닫기",
+    scroll_page:       "스크롤",
+    navigate_back:     "뒤로가기",
+    navigate_forward:  "앞으로가기",
+    play_youtube:      "유튜브 재생",
+    refresh_page:      "새로고침",
+    next_tab:          "다음 탭",
+    previous_tab:      "이전 탭",
+    zoom_in:           "확대",
+    zoom_out:          "축소",
+    zoom_reset:        "화면 초기화",
+    bookmark_current:  "북마크",
+    mute_tab:          "음소거",
+    capture_screenshot:"스크린샷",
+  };
+  return map[toolName] ?? toolName;
+}
+
+/** background에서 오는 PROGRESS_UPDATE 메시지 수신 */
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "PROGRESS_UPDATE") {
+    const { current, total, toolName } = message;
+    // 단일 명령은 표시 불필요
+    if (total > 1) {
+      micHint.textContent = `실행 중 (${current}/${total}): ${formatToolNameKorean(toolName)}`;
+      console.log(`[Popup] 진행: ${current}/${total} — ${toolName}`);
+    }
+  }
+});
+
 /** ── 이벤트 바인딩 ── */
 micBtn.addEventListener("click", () => {
+  // 진행 중인 TTS 오디오가 있으면 정지 후 새 명령 시작
+  if (window.currentAudio) {
+    window.currentAudio.pause();
+    window.currentAudio = null;
+  }
   if (isRecording) {
     stopRecording();
   } else {
@@ -546,10 +706,67 @@ historyClearBtn.addEventListener("click", async () => {
   renderHistory([]);
 });
 
+function submitTextCommand() {
+  const text = textCmdInput.value.trim();
+  if (!text) return;
+  textCmdInput.value = "";
+  textCmdBtn.disabled = true;
+  rerunCommand(text);
+}
+
+textCmdBtn.addEventListener("click", submitTextCommand);
+
+textCmdInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitTextCommand();
+});
+
+/** ── 백그라운드 탭 안내 배너 ── */
+
+/**
+ * 첫 실행 시 한 번만 안내 배너를 표시.
+ * 닫기(×) 버튼 클릭 시 storage에 플래그를 저장해 다시 표시하지 않음.
+ */
+async function initInfoBanner() {
+  const { info_shown = false } = await chrome.storage.local.get("info_shown");
+  if (info_shown) return;
+
+  const banner     = document.getElementById("infoBanner");
+  const closeBtn   = document.getElementById("infoBannerClose");
+
+  banner.classList.remove("hidden");
+
+  closeBtn.addEventListener("click", async () => {
+    banner.classList.add("hidden");
+    await chrome.storage.local.set({ info_shown: true });
+    console.log("[Popup] 안내 배너 닫힘, 플래그 저장 완료");
+  });
+}
+
+/** ── 단축키 자동 시작 ── */
+
+/**
+ * 단축키(Ctrl+Shift+1)로 팝업이 열렸을 때 자동으로 녹음 시작.
+ * background.js가 설정한 "auto_start_recording" 플래그를 확인하고,
+ * 있으면 즉시 제거한 뒤 녹음을 시작.
+ */
+async function checkAutoStart() {
+  const { auto_start_recording = false } = await chrome.storage.local.get("auto_start_recording");
+  if (!auto_start_recording) return;
+
+  // 다음 팝업 열 때 자동 실행 안 되도록 플래그 즉시 제거
+  await chrome.storage.local.remove("auto_start_recording");
+  console.log("[Popup] 단축키로 실행됨 — 자동 녹음 시작");
+
+  // 한 프레임 대기해서 UI가 완전히 준비된 후 녹음 시작
+  requestAnimationFrame(() => startRecording());
+}
+
 /** ── 초기화 ── */
 initWaveformCanvas();
 startExampleRotation();
 loadHistory();
+initInfoBanner();
+checkAutoStart();
 
 // API 키 설정 여부 확인 (두 키 모두 필요)
 chrome.storage.local.get(["openaiApiKey", "anthropicApiKey"], (result) => {

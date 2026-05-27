@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Voice Browser",
+  "name": "JARVIS",
   "version": "1.0.0",
-  "description": "한국어 음성 명령으로 브라우저를 제어하는 확장 프로그램",
+  "description": "한국어 음성과 텍스트로 브라우저를 제어하는 AI 어시스턴트 JARVIS",
 
   "permissions": [
     "tabs",
@@ -25,7 +25,7 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Voice Browser",
+    "default_title": "JARVIS",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -54,5 +54,15 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+
+  "commands": {
+    "toggle-voice": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+1",
+        "mac": "Ctrl+Shift+1"
+      },
+      "description": "음성 명령 시작/중지"
+    }
   }
 }
