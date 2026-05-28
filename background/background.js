@@ -746,6 +746,12 @@ async function processCommand(text) {
   const intentLabels = tools.map((t) => formatIntentLabel(t.name, t.input));
   const summary      = summarizeResults(results, intentLabels);
 
+  // 모든 명령 완료 후 마지막 탭으로 포커스 이동 (500ms 지연)
+  // TTS는 offscreen document에서 재생되므로 팝업 닫힘 후에도 음성이 유지됨
+  if (lastUsedTabId) {
+    setTimeout(() => focusLastUsedTab(), 500);
+  }
+
   return {
     success:  allSuccess,
     isUnknown: false,
@@ -1196,10 +1202,45 @@ async function executeSummarizePage() {
   return data.summary;
 }
 
+/** ── Offscreen Document (TTS 오디오 재생) ── */
+
+/**
+ * TTS 재생용 offscreen document가 없으면 새로 생성.
+ * offscreen document는 팝업과 달리 닫혀도 오디오가 유지됨 (Chrome 116+).
+ */
+async function ensureOffscreenDocument() {
+  if (!chrome.offscreen) {
+    throw new Error("chrome.offscreen API 미지원 (Chrome 116 미만)");
+  }
+  const existing = await chrome.runtime.getContexts({
+    contextTypes:  ["OFFSCREEN_DOCUMENT"],
+    documentUrls:  [chrome.runtime.getURL("offscreen/offscreen.html")],
+  });
+  if (existing.length > 0) return;
+
+  await chrome.offscreen.createDocument({
+    url:           chrome.runtime.getURL("offscreen/offscreen.html"),
+    reasons:       ["AUDIO_PLAYBACK"],
+    justification: "팝업이 닫힌 후에도 TTS 음성을 끊기지 않고 재생하기 위해 사용",
+  });
+  console.log("[Offscreen] document 생성 완료");
+}
+
+/**
+ * offscreen document에 base64 MP3를 전달해 재생 요청
+ * @param {string} base64Mp3
+ */
+async function playAudioOffscreen(base64Mp3) {
+  await ensureOffscreenDocument();
+  await chrome.runtime.sendMessage({ type: "PLAY_AUDIO_OFFSCREEN", audio: base64Mp3 });
+  console.log("[Offscreen] 재생 요청 전송 완료");
+}
+
 /** ── TTS (백엔드 /api/tts 호출) ── */
 
 /**
- * 텍스트를 백엔드 OpenAI TTS로 변환해 base64 MP3로 반환
+ * 텍스트를 백엔드 OpenAI TTS로 변환해 offscreen document에서 재생.
+ * offscreen 미지원 시 audio 데이터를 반환해 popup에서 폴백 재생.
  * 실패해도 { success: false, error } 형태로 반환 (throw 안 함)
  *
  * @param {string} text - 읽어줄 텍스트
@@ -1237,7 +1278,15 @@ async function generateSpeech(text) {
     return { success: false, error: "백엔드가 audio를 반환하지 않았습니다." };
   }
 
-  return { success: true, audio: data.audio };
+  // offscreen document에서 재생 시도 (팝업 닫혀도 오디오 유지)
+  // 실패 시 audio 반환 → popup이 폴백으로 직접 재생
+  try {
+    await playAudioOffscreen(data.audio);
+    return { success: true };
+  } catch (err) {
+    console.warn("[TTS] offscreen 재생 실패, popup 폴백:", err.message);
+    return { success: true, audio: data.audio };
+  }
 }
 
 /** ── 유튜브 검색 결과 페이지 열기 ── */
@@ -1295,6 +1344,25 @@ async function executeNaverSearch(input) {
 }
 
 /** ── 유틸 ── */
+
+/**
+ * lastUsedTabId 탭을 활성화하고 해당 창에 포커스를 이동
+ * 탭이 닫혔거나 없으면 아무것도 안 함
+ */
+async function focusLastUsedTab() {
+  if (!lastUsedTabId || !(await isTabAlive(lastUsedTabId))) {
+    console.log("[Focus] 이동할 탭 없음 — 포커스 유지");
+    return;
+  }
+  try {
+    const tab = await chrome.tabs.get(lastUsedTabId);
+    await chrome.tabs.update(lastUsedTabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+    console.log("[Focus] 마지막 탭으로 포커스 이동 완료, tabId:", lastUsedTabId);
+  } catch (err) {
+    console.warn("[Focus] 포커스 이동 실패 (무시됨):", err.message);
+  }
+}
 
 /**
  * 탭 ID가 아직 열려 있는지 확인 (닫혔거나 존재하지 않으면 false)

@@ -618,7 +618,9 @@ async function speakResult(text) {
           console.error("[TTS] 생성 실패:", response?.error);
           return;
         }
-        playAudio(response.audio);
+        // 정상: background가 offscreen에서 재생 → response.audio 없음
+        // 폴백: offscreen 미지원 시 background가 audio를 반환 → popup에서 직접 재생
+        if (response.audio) playAudio(response.audio);
       }
     );
   } catch (err) {
