@@ -820,12 +820,15 @@ async function executeAction(tool, input) {
     }
 
     case "scroll_page": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
 
       try {
         await chrome.scripting.executeScript({
-          target: { tabId: activeTab.id },
+          target: { tabId: tab.id },
           // ★ 이 함수는 페이지 컨텍스트에서 실행됨 (서비스 워커 스코프 바깥)
           // ★ 외부 변수·클로저 접근 불가 → 필요한 값은 반드시 args로 전달
           func: (direction) => {
@@ -840,7 +843,6 @@ async function executeAction(tool, input) {
           args: [input.direction],
         });
       } catch (err) {
-        // chrome:// 나 extension 페이지 등 스크립트 주입이 금지된 페이지
         console.error("[Action] executeScript 실패:", err.message);
         throw new Error("이 페이지는 스크롤할 수 없습니다. (보호된 페이지)");
       }
@@ -850,10 +852,13 @@ async function executeAction(tool, input) {
     }
 
     case "navigate_back": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
       try {
-        await chrome.tabs.goBack(activeTab.id);
+        await chrome.tabs.goBack(tab.id);
       } catch (err) {
         throw new Error("뒤로 이동할 수 없습니다. (이전 페이지가 없거나 접근 불가)");
       }
@@ -862,10 +867,13 @@ async function executeAction(tool, input) {
     }
 
     case "navigate_forward": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
       try {
-        await chrome.tabs.goForward(activeTab.id);
+        await chrome.tabs.goForward(tab.id);
       } catch (err) {
         throw new Error("앞으로 이동할 수 없습니다. (다음 페이지가 없거나 접근 불가)");
       }
@@ -886,9 +894,12 @@ async function executeAction(tool, input) {
     }
 
     case "refresh_page": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
-      await chrome.tabs.reload(activeTab.id);
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
+      await chrome.tabs.reload(tab.id);
       console.log("[Action] refresh_page 완료");
       return "페이지를 새로고침했습니다";
     }
@@ -918,49 +929,61 @@ async function executeAction(tool, input) {
     }
 
     case "zoom_in": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
-      const cur  = await chrome.tabs.getZoom(activeTab.id);
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
+      const cur  = await chrome.tabs.getZoom(tab.id);
       const next = Math.min(Math.round((cur + 0.25) * 100) / 100, 5.0);
-      await chrome.tabs.setZoom(activeTab.id, next);
+      await chrome.tabs.setZoom(tab.id, next);
       console.log("[Action] zoom_in 완료:", next);
       return `페이지를 ${Math.round(next * 100)}%로 확대했습니다`;
     }
 
     case "zoom_out": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
-      const cur  = await chrome.tabs.getZoom(activeTab.id);
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
+      const cur  = await chrome.tabs.getZoom(tab.id);
       const next = Math.max(Math.round((cur - 0.25) * 100) / 100, 0.25);
-      await chrome.tabs.setZoom(activeTab.id, next);
+      await chrome.tabs.setZoom(tab.id, next);
       console.log("[Action] zoom_out 완료:", next);
       return `페이지를 ${Math.round(next * 100)}%로 축소했습니다`;
     }
 
     case "zoom_reset": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
-      await chrome.tabs.setZoom(activeTab.id, 1.0);
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
+      await chrome.tabs.setZoom(tab.id, 1.0);
       console.log("[Action] zoom_reset 완료");
       return "페이지 크기를 100%로 초기화했습니다";
     }
 
     case "bookmark_current": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
-      if (!activeTab.url || activeTab.url.startsWith("chrome://") || activeTab.url.startsWith("chrome-extension://")) {
-        throw new Error("이 페이지는 북마크에 추가할 수 없습니다.");
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
       }
-      await chrome.bookmarks.create({ title: activeTab.title || activeTab.url, url: activeTab.url });
-      console.log("[Action] bookmark_current 완료:", activeTab.url);
-      return `북마크에 추가했습니다: ${activeTab.title || activeTab.url}`;
+      await chrome.bookmarks.create({ title: tab.title || tab.url, url: tab.url });
+      console.log("[Action] bookmark_current 완료:", tab.url);
+      return `북마크에 추가했습니다: ${tab.title || tab.url}`;
     }
 
     case "mute_tab": {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
-      const isMuted = activeTab.mutedInfo?.muted ?? false;
-      await chrome.tabs.update(activeTab.id, { muted: !isMuted });
+      const tab = await getBestTargetTab();
+      if (!tab) throw new Error("대상 탭을 찾을 수 없습니다.");
+      if (isRestrictedUrl(tab.url ?? "")) {
+        return "이 페이지에서는 사용할 수 없는 명령입니다 (시스템 페이지)";
+      }
+      const isMuted = tab.mutedInfo?.muted ?? false;
+      await chrome.tabs.update(tab.id, { muted: !isMuted });
       console.log("[Action] mute_tab 완료, muted:", !isMuted);
       return isMuted ? "음소거를 해제했습니다" : "탭을 음소거했습니다";
     }
@@ -1102,17 +1125,14 @@ async function executeCaptureScreenshot() {
  * @returns {Promise<string>} 요약 텍스트
  */
 async function executeSummarizePage() {
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // lastUsedTabId가 일반 페이지면 우선 사용 (멀티 명령에서 방금 연 탭 요약)
+  const activeTab = await getBestTargetTab();
   if (!activeTab) throw new Error("활성 탭을 찾을 수 없습니다.");
 
-  // chrome://, chrome-extension://, about: 등 시스템 페이지는 스크립트 주입 불가
+  // 시스템 페이지는 스크립트 주입 불가
   const url = activeTab.url ?? "";
-  if (
-    url.startsWith("chrome://") ||
-    url.startsWith("chrome-extension://") ||
-    url.startsWith("about:")
-  ) {
-    throw new Error("이 페이지는 요약할 수 없습니다. (시스템 페이지)");
+  if (isRestrictedUrl(url)) {
+    throw new Error("이 페이지는 요약할 수 없습니다 (시스템 페이지)");
   }
 
   // 페이지 텍스트 추출 — article > main > body 순으로 시도
@@ -1288,6 +1308,40 @@ async function isTabAlive(tabId) {
   } catch {
     return false;
   }
+}
+
+/**
+ * URL이 Chrome 시스템 페이지인지 확인 (줌·스크립트 조작 불가)
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isRestrictedUrl(url) {
+  return (
+    url.startsWith("chrome://") ||
+    url.startsWith("chrome-extension://") ||
+    url.startsWith("edge://") ||
+    url.startsWith("about:") ||
+    url.startsWith("view-source:")
+  );
+}
+
+/**
+ * 페이지 조작 명령(줌·스크롤·북마크 등)에 사용할 최적 탭을 반환
+ * - lastUsedTabId가 살아있고 일반 페이지면 우선 사용
+ * - 아니면 현재 활성 탭으로 폴백
+ * @returns {Promise<chrome.tabs.Tab|null>}
+ */
+async function getBestTargetTab() {
+  if (lastUsedTabId) {
+    try {
+      const tab = await chrome.tabs.get(lastUsedTabId);
+      if (tab && !isRestrictedUrl(tab.url ?? "")) return tab;
+    } catch {
+      // 탭이 닫혔으면 무시하고 폴백
+    }
+  }
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return activeTab ?? null;
 }
 
 /**
