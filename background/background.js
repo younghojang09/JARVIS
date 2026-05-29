@@ -704,6 +704,59 @@ function summarizeResults(results, intentLabels = []) {
   return `${successes.length}개 성공, ${failures.length}개 실패 (${failLabel}${moreText})`;
 }
 
+/** ── 단축어 (백엔드 호출 없이 즉시 실행) ── */
+
+/**
+ * 단축어 목록. 향후 항목 추가는 이 배열에만 추가하면 됨.
+ * keywords + actionVerbs 둘 다 포함된 명령에만 매칭.
+ */
+const SHORTCUTS = [
+  {
+    keywords:    ["발표 자료", "발표자료", "프레젠테이션", "ppt", "피피티", "발표"],
+    actionVerbs: ["열어", "띄워", "켜", "보여", "실행"],
+    url:         "https://www.canva.com/design/DAHK8YUqBRg/WjdCkD85YOc38TPJTF671A/edit",
+    name:        "발표 자료",
+  },
+];
+
+/**
+ * 텍스트가 단축어에 매칭되면 탭을 열고 processCommand 형식 결과를 반환.
+ * 매칭 안 되면 null 반환 → 기존 백엔드 흐름으로 진행.
+ *
+ * @param {string} text
+ * @returns {Promise<Object|null>}
+ */
+async function checkShortcut(text) {
+  // 소문자 변환 + 연속 공백 정규화
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+
+  for (const shortcut of SHORTCUTS) {
+    const hasKeyword    = shortcut.keywords.some((kw) => normalized.includes(kw));
+    const hasActionVerb = shortcut.actionVerbs.some((v)  => normalized.includes(v));
+    if (!hasKeyword || !hasActionVerb) continue;
+
+    console.log("[Shortcut] 매칭:", shortcut.name, "→", shortcut.url);
+
+    const tab = await chrome.tabs.create({ url: shortcut.url, active: false });
+    lastUsedTabId = tab.id;
+
+    const message = `${shortcut.name}을 띄웠습니다`;
+    const tool    = { name: "open_url", input: { url: shortcut.url } };
+    const result  = { tool: "open_url", input: { url: shortcut.url }, success: true, message };
+
+    return {
+      success:      true,
+      isUnknown:    false,
+      tools:        [tool],
+      results:      [result],
+      intentLabels: [`🔗 ${shortcut.name} 열기`],
+      message:      `✓ ${message}`,
+    };
+  }
+
+  return null;
+}
+
 /** ── 의도 파악 + 실행 통합 ── */
 
 /**
@@ -715,6 +768,14 @@ function summarizeResults(results, intentLabels = []) {
  */
 async function processCommand(text) {
   console.log("[processCommand] 시작:", text);
+
+  // 단축어 체크 — 매칭되면 백엔드 호출 없이 즉시 처리
+  const shortcutResult = await checkShortcut(text);
+  if (shortcutResult) {
+    console.log("[processCommand] 단축어 처리 완료 — 백엔드 생략");
+    if (lastUsedTabId) setTimeout(() => focusLastUsedTab(), 500);
+    return shortcutResult;
+  }
 
   const { tools } = await parseIntent(text); // 실패 시 throw → 핸들러가 error로 반환
   console.log("[processCommand] 의도 파악 완료:", tools.length, "개 도구");
